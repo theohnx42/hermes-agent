@@ -64,6 +64,46 @@ class TestDoctorToolAvailabilitySummary:
         assert [item["name"] for item in filtered] == ["web"]
 
 
+def test_doctor_uses_targeted_state_db_probe_without_full_integrity_scan(
+    monkeypatch, tmp_path
+):
+    """Normal doctor must not run an unbounded scan over a large session DB."""
+    import sqlite3
+    import hermes_state
+
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    (home / "config.yaml").write_text("{}\n", encoding="utf-8")
+    (home / ".env").write_text("OPENAI_API_KEY=sk-test\n", encoding="utf-8")
+    state_db = home / "state.db"
+    conn = sqlite3.connect(state_db)
+    conn.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY)")
+    conn.commit()
+    conn.close()
+
+    calls = []
+
+    def targeted_probe(path, *, run_integrity_check):
+        calls.append((path, run_integrity_check))
+        return None
+
+    monkeypatch.setattr(hermes_state, "_db_opens_cleanly", targeted_probe)
+    monkeypatch.setattr(doctor_mod, "HERMES_HOME", home)
+    monkeypatch.setattr(doctor_mod, "_DHH", str(home))
+    monkeypatch.setattr(doctor_mod, "PROJECT_ROOT", tmp_path / "project")
+
+    fake_model_tools = types.SimpleNamespace(
+        check_tool_availability=lambda *a, **kw: (_ for _ in ()).throw(SystemExit(0)),
+        TOOLSET_REQUIREMENTS={},
+    )
+    monkeypatch.setitem(sys.modules, "model_tools", fake_model_tools)
+
+    with pytest.raises(SystemExit):
+        doctor_mod.run_doctor(Namespace(fix=False))
+
+    assert calls == [(state_db, False)]
+
+
 class TestDoctorEnvFileEncoding:
     """Regression for #18637 (bug 3): `hermes doctor` crashed on Windows
     Chinese locale (GBK) because `.env` was read with Path.read_text() which

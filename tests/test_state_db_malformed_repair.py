@@ -66,6 +66,45 @@ def test_duplicate_fts_makes_every_statement_fail(tmp_path):
     assert is_malformed_db_error(exc_info.value)
 
 
+def test_health_probe_can_skip_unbounded_full_integrity_scan(tmp_path, monkeypatch):
+    """Doctor can run targeted FTS probes without scanning every DB page."""
+    db_path = tmp_path / "state.db"
+    _build_healthy_db(db_path)
+
+    statements: list[str] = []
+    real_connect = sqlite3.connect
+
+    class TrackingConnection(sqlite3.Connection):
+        def execute(self, sql, parameters=()):
+            statements.append(str(sql))
+            return super().execute(sql, parameters)
+
+    def tracking_connect(*args, **kwargs):
+        kwargs["factory"] = TrackingConnection
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(hermes_state.sqlite3, "connect", tracking_connect)
+
+    reason = hermes_state._db_opens_cleanly(
+        db_path,
+        run_integrity_check=False,
+    )
+
+    assert reason is None
+    assert not any("integrity_check" in sql.lower() for sql in statements)
+    assert any("pragma journal_mode" in sql.lower() for sql in statements)
+    assert any("select count(*) from sessions" in sql.lower() for sql in statements)
+    assert any(
+        "from messages_fts" in sql.lower() and "match" in sql.lower()
+        for sql in statements
+    )
+    assert any("insert into sessions" in sql.lower() for sql in statements)
+
+    statements.clear()
+    reason = hermes_state._db_opens_cleanly(db_path)
+
+    assert reason is None
+    assert any("pragma integrity_check" in sql.lower() for sql in statements)
 
 
 def test_repaired_db_search_works(tmp_path):
@@ -393,5 +432,4 @@ def test_repair_stale_btree_index_preserves_rows(tmp_path):
         assert msgs[0]["content"] == "hello world 0"
     finally:
         db.close()
-
 

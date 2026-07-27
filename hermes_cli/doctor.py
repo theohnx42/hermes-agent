@@ -1507,7 +1507,15 @@ def run_doctor(args):
             # repaired in place with --fix).
             from hermes_state import _db_opens_cleanly, repair_state_db_schema
 
-            _write_reason = _db_opens_cleanly(state_db_path)
+            # Doctor is an interactive readiness check, not an offline database
+            # scrub. A full PRAGMA integrity_check scans every page and can block
+            # for many minutes on multi-gigabyte session stores. Keep the targeted
+            # schema, FTS read, and rolled-back FTS write probes here; repair paths
+            # retain the helper's full-integrity default.
+            _write_reason = _db_opens_cleanly(
+                state_db_path,
+                run_integrity_check=False,
+            )
             if _write_reason is not None:
                 check_warn(
                     f"{_DHH}/state.db fails a write-health probe (FTS index may be corrupt)",
