@@ -261,6 +261,12 @@ class TestInPlaceConfigDefault:
         from hermes_cli.config import DEFAULT_CONFIG
 
         assert DEFAULT_CONFIG["compression"].get("in_place") is True
+        assert (
+            DEFAULT_CONFIG["compression"].get("max_lineage_compressions") == 0
+        )
+        assert (
+            DEFAULT_CONFIG["compression"].get("rotate_with_handoff") is False
+        )
 
 
 class TestCompactedTurnsStaySearchable:

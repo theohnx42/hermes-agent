@@ -119,6 +119,87 @@ class TestGoalMigratesOnRotation:
             goals._DB_CACHE.clear()
 
 
+class TestAutomaticLocalRotation:
+    def test_threshold_rotates_with_structured_handoff_and_distinct_event(
+        self, tmp_path: Path
+    ):
+        db = SessionDB(db_path=tmp_path / "state.db")
+        parent = "AUTO_LOCAL_ROTATION"
+        db.create_session(
+            parent,
+            source="cli",
+            cwd="/work/project",
+            profile_name="condor",
+        )
+        db.set_session_title(parent, "long investigation")
+        db.set_meta("compression-lineage-count:" + parent, "1")
+        agent = _build_agent_with_db(db, parent, platform="cli")
+        agent.compression_in_place = True
+        agent.compression_max_lineage_compressions = 2
+        agent.compression_rotate_with_handoff = True
+        events = []
+        agent.event_callback = lambda name, payload: events.append((name, payload))
+        agent.context_compressor.compress.return_value = [
+            {
+                "role": "user",
+                "content": (
+                    "## Goal\nfinish the investigation\n"
+                    "## Active State\n/work/project on main\n"
+                    "## Blocked\nopen loop remains\n"
+                    "## Key Decisions\nrotate atomically"
+                ),
+            },
+            {"role": "assistant", "content": "Ready to continue."},
+        ]
+
+        returned, _ = agent._compress_context(
+            _msgs(), "sys", approx_tokens=120_000
+        )
+
+        child = agent.session_id
+        assert child != parent
+        assert [m["content"] for m in returned] == [
+            "## Goal\nfinish the investigation\n"
+            "## Active State\n/work/project on main\n"
+            "## Blocked\nopen loop remains\n"
+            "## Key Decisions\nrotate atomically",
+            "Ready to continue.",
+        ]
+        child_row = db.get_session(child)
+        assert child_row["parent_session_id"] == parent
+        assert child_row["title"] == "long investigation"
+        assert child_row["cwd"] == "/work/project"
+        import json
+
+        marker = json.loads(child_row["model_config"])["_local_rotation_handoff"]
+        assert marker["reason"] == "max_lineage_compressions"
+        assert "decisions" in marker["preserves"]
+        assert "open_loops" in marker["preserves"]
+        assert db.get_compression_lineage_count(child) == 0
+        rotation_events = [
+            payload for name, payload in events if name == "session:rotate"
+        ]
+        assert len(rotation_events) == 1
+        assert rotation_events[0]["old_session_id"] == parent
+        assert rotation_events[0]["session_id"] == child
+        assert rotation_events[0]["compression_count"] == 2
+
+    def test_disabled_default_keeps_in_place_compaction(self, tmp_path: Path):
+        db = SessionDB(db_path=tmp_path / "state.db")
+        session_id = "ROTATION_DISABLED"
+        db.create_session(session_id, source="cli")
+        agent = _build_agent_with_db(db, session_id, platform="cli")
+        agent.compression_in_place = True
+        agent.compression_max_lineage_compressions = 0
+        agent.compression_rotate_with_handoff = False
+
+        agent._compress_context(_msgs(), "sys", approx_tokens=120_000)
+
+        assert agent.session_id == session_id
+        assert db.get_session(session_id)["ended_at"] is None
+        assert db.get_compression_lineage_count(session_id) == 1
+
+
 class TestOrphanRollbackOnCreateFailure:
     def test_rolls_back_to_parent_when_child_create_fails(self, tmp_path: Path):
         db = SessionDB(db_path=tmp_path / "state.db")

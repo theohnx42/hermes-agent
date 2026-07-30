@@ -114,6 +114,30 @@ auxiliary:
 | `codex_gpt55_autoraise` | `true` | bool | Raise the trigger to 85% for gpt-5.5 on the ChatGPT Codex OAuth route (see below). Set `false` to keep the global `threshold` |
 | `codex_gpt55_autoraise_notice` | `true` | bool | Show the one-time Codex gpt-5.5 autoraise notice. Set `false` to keep the 85% autoraise but suppress the banner |
 | `codex_app_server_auto` | `native` | `native`, `hermes`, `off` | Thread-compaction mode for Codex app-server sessions (see below) |
+| `in_place` | `true` | bool | Compact on the same session id instead of rotating to a new one (see below) |
+| `max_lineage_compressions` | `0` | ≥0 | Successful compactions before a fresh local continuation; 0 disables |
+| `rotate_with_handoff` | `false` | bool | Enable the automatic continuation boundary when the maximum is positive |
+
+### In-place compaction (single stable session id)
+
+With `compression.in_place: true` (the default), a compaction **rewrites the live message list on the same session id**: the system prompt is rebuilt, the summarized middle is swapped in, and the pre-compaction turns are soft-archived under the same id (`active=0, compacted=1` in the session store) — still searchable via `session_search` and recoverable, never deleted. There is no `parent_session_id` chain and no `name #N` renumbering; one conversation keeps one durable id for its whole life. This eliminated the session-rotation bug cluster (lost `/goal` state, orphaned sessions, search gaps across boundaries).
+
+Consumers observe the mode rather than diffing session ids:
+
+- The `session:compress` event carries `in_place: true/false` and `old_session_id` (empty string in in-place mode, since there is no old id).
+- The gateway re-baselines transcript handling from the agent's rotation-independent `_last_compaction_in_place` flag, not from an id-change diff.
+
+Set `in_place: false` to restore the legacy rotating path, where each compaction commits a new session id linked to the previous one via `parent_session_id`.
+
+For long-lived local sessions that need periodic hard boundaries without giving
+up the safe in-place default, set both
+`compression.max_lineage_compressions` to a positive integer and
+`compression.rotate_with_handoff: true`. The count is persisted with the
+compacted transcript. At the boundary the existing compression-child
+transaction publishes the structured summary/tail, continuation metadata,
+title, and `/goal` move as one SQLite commit, then emits `session:rotate`.
+The new child resets the count. Leaving either setting disabled is
+behavior-neutral.
 
 ### Per-model threshold overrides
 

@@ -469,6 +469,8 @@ def load_cli_config() -> Dict[str, Any]:
             "enabled": True,      # Auto-compress when approaching context limit
             "threshold": 0.50,    # Compress at 50% of model's context limit
             "min_tail_user_messages": 1,  # Real user messages guaranteed in the tail (1 = existing single anchor)
+            "max_lineage_compressions": 0,  # 0 disables automatic local rotation
+            "rotate_with_handoff": False,
         },
         "agent": {
             "max_turns": 500,  # Default max tool-calling iterations (shared with subagents)

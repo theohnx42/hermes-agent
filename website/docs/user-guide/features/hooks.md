@@ -78,6 +78,8 @@ async def handle(event_type: str, context: dict):
 | `session:start` | New messaging session created | `platform`, `user_id`, `session_id`, `session_key` |
 | `session:end` | Session ended (before reset) | `platform`, `user_id`, `session_key` |
 | `session:reset` | User ran `/new` or `/reset` | `platform`, `user_id`, `session_key` |
+| `session:compress` | Context compression completed for a session | `platform`, `session_id`, `old_session_id` (empty when compacted in place), `in_place` (bool — `true` = transcript compacted on the same id, `false` = rotated from `old_session_id`), `compression_count` |
+| `session:rotate` | Automatic local context rotation published a fresh continuation after the configured compaction limit | `platform`, `session_id`, `old_session_id`, `reason` (`max_lineage_compressions`), `compression_count`, `handoff` (`structured_compaction_summary`) |
 | `agent:start` | Agent begins processing a message | `platform`, `user_id`, `session_id`, `message` |
 | `agent:step` | Each iteration of the tool-calling loop | `platform`, `user_id`, `session_id`, `iteration`, `tool_names` |
 | `agent:end` | Agent finishes processing | `platform`, `user_id`, `session_id`, `message`, `response` |

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from hermes_state import SessionDB
@@ -176,6 +178,114 @@ def test_publish_compression_child_rejects_lost_or_expired_lease(db: SessionDB) 
     assert [m["content"] for m in db.get_messages("lease-parent")] == [
         "new durable turn"
     ]
+
+
+def test_local_rotation_atomically_moves_continuity_state(db: SessionDB) -> None:
+    db.create_session(
+        "rotation-parent",
+        source="webui",
+        model_config={"profile": "condor"},
+        cwd="/work/project",
+        profile_name="condor",
+    )
+    db.set_session_title("rotation-parent", "active investigation")
+    goal = {
+        "goal": "finish the investigation",
+        "status": "active",
+        "subgoals": ["preserve decisions", "close open loops"],
+    }
+    db.set_meta("goal:rotation-parent", json.dumps(goal))
+    db.set_meta("compression-lineage-count:rotation-parent", "2")
+    assert db.try_acquire_compression_lock(
+        "rotation-parent", "winner", ttl_seconds=60
+    )
+
+    db.publish_compression_child(
+        parent_session_id="rotation-parent",
+        child_session_id="rotation-child",
+        source="webui",
+        model_config={
+            "_local_rotation_handoff": {
+                "preserves": ["decisions", "open_loops"],
+            }
+        },
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    "## Goal\nfinish the investigation\n"
+                    "## Active State\nworking tree preserved\n"
+                    "## Blocked\none open loop\n"
+                    "## Key Decisions\nkeep the atomic boundary"
+                ),
+            }
+        ],
+        compression_lock_holder="winner",
+        local_rotation=True,
+        lineage_compression_count=3,
+    )
+
+    parent = db.get_session("rotation-parent")
+    child = db.get_session("rotation-child")
+    assert parent["ended_at"] is not None
+    assert parent["end_reason"] == "compression"
+    assert parent["title"] is None
+    assert child["parent_session_id"] == "rotation-parent"
+    assert child["title"] == "active investigation"
+    assert child["cwd"] == "/work/project"
+    assert child["profile_name"] == "condor"
+    child_model_config = json.loads(child["model_config"])
+    assert child_model_config["_local_rotation_handoff"]["preserves"] == [
+        "decisions",
+        "open_loops",
+    ]
+    assert json.loads(db.get_meta("goal:rotation-parent"))["status"] == "cleared"
+    assert json.loads(db.get_meta("goal:rotation-child")) == goal
+    assert db.get_compression_lineage_count("rotation-parent") == 3
+    assert db.get_compression_lineage_count("rotation-child") == 0
+
+
+def test_local_rotation_last_boundary_failure_rolls_everything_back(
+    db: SessionDB,
+) -> None:
+    """A crash/error at the final parent-close boundary exposes only old state."""
+    db.create_session("rollback-parent", source="webui", cwd="/work/project")
+    db.set_session_title("rollback-parent", "rollback proof")
+    goal = {"goal": "do not lose me", "status": "active"}
+    db.set_meta("goal:rollback-parent", json.dumps(goal))
+    db.set_meta("compression-lineage-count:rollback-parent", "2")
+    assert db.try_acquire_compression_lock(
+        "rollback-parent", "winner", ttl_seconds=60
+    )
+    db._conn.execute(
+        """
+        CREATE TRIGGER fail_local_rotation_parent_close
+        BEFORE UPDATE OF ended_at ON sessions
+        WHEN NEW.id = 'rollback-parent' AND NEW.ended_at IS NOT NULL
+        BEGIN
+          SELECT RAISE(ABORT, 'simulated crash at parent close');
+        END
+        """
+    )
+
+    with pytest.raises(Exception, match="simulated crash at parent close"):
+        db.publish_compression_child(
+            parent_session_id="rollback-parent",
+            child_session_id="rollback-child",
+            source="webui",
+            messages=[{"role": "user", "content": "structured handoff"}],
+            compression_lock_holder="winner",
+            local_rotation=True,
+            lineage_compression_count=3,
+        )
+
+    parent = db.get_session("rollback-parent")
+    assert parent["ended_at"] is None
+    assert parent["title"] == "rollback proof"
+    assert db.get_session("rollback-child") is None
+    assert json.loads(db.get_meta("goal:rollback-parent")) == goal
+    assert db.get_meta("goal:rollback-child") is None
+    assert db.get_compression_lineage_count("rollback-parent") == 2
 
 
 def test_compression_lease_blocks_non_owner_but_allows_owner_flush(

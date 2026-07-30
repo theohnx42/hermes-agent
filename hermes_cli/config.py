@@ -1558,6 +1558,16 @@ DEFAULT_CONFIG = {
                                       # session_search and recoverable, not deleted.
                                       # Default True since 2107b86024; set False to
                                       # restore the legacy rotating-compaction path.
+        "max_lineage_compressions": 0,  # Opt-in hard context-rotation boundary.
+                                      # After this many successful compactions in
+                                      # one live continuation, atomically publish a
+                                      # fresh local child session. 0 = disabled.
+        "rotate_with_handoff": False, # Must also be true before the boundary above
+                                      # is active. The structured compaction summary,
+                                      # protected tail, title, cwd, profile, routing,
+                                      # and /goal state move to the child in one
+                                      # transaction. False preserves normal in-place
+                                      # compaction behavior.
         "model_thresholds": {},       # Per-model threshold overrides. Keys are
                                       # substring-matched against the model name
                                       # (longest match wins); values replace the
