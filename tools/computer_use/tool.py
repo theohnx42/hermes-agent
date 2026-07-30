@@ -198,6 +198,58 @@ def _cua_permission_mode(session_id: str) -> str:
     return "standard"
 
 
+def _cua_ownership_role() -> str:
+    """Classify the current surface for cross-process CUA arbitration."""
+    explicit = os.environ.get("HERMES_CUA_OWNER_ROLE", "").strip().lower()
+    if explicit in {"desktop", "gateway", "interactive"}:
+        return explicit
+    try:
+        from gateway.session_context import get_session_env
+
+        platform = (
+            get_session_env("HERMES_SESSION_PLATFORM", "")
+            or get_session_env("HERMES_SESSION_SOURCE", "")
+            or ""
+        )
+    except Exception:
+        platform = ""
+    platform = str(platform).strip().lower()
+    if platform == "desktop":
+        return "desktop"
+    if platform and platform not in {"cli", "tui"}:
+        return "gateway"
+    if os.environ.get("HERMES_GATEWAY_SESSION"):
+        return "gateway"
+    return "interactive"
+
+
+def _release_all_for_ownership_handoff() -> None:
+    """Cooperatively yield this process's CUA workers to Desktop."""
+    global _backend
+    with _backend_lock:
+        entries = [
+            (backend, _backend_call_locks.get(sid))
+            for sid, backend in _backends.items()
+        ]
+        _backends.clear()
+        _backend_call_locks.clear()
+        _backend_permission_modes.clear()
+        _backend = None
+    seen = set()
+    for backend, call_lock in entries:
+        if id(backend) in seen:
+            continue
+        seen.add(id(backend))
+        try:
+            if call_lock is not None:
+                with call_lock:
+                    backend.stop()
+            else:
+                backend.stop()
+        except Exception:
+            logger.debug("CUA ownership handoff cleanup failed", exc_info=True)
+
+
 def _get_backend(session_id: str = "") -> ComputerUseBackend:
     global _backend
     sid = str(session_id or "")
@@ -235,6 +287,14 @@ def _get_backend(session_id: str = "") -> ComputerUseBackend:
                     from tools.computer_use.cua_backend import CuaDriverBackend
 
                     backend = CuaDriverBackend(permission_mode=permission_mode)
+                    configure_ownership = getattr(
+                        backend, "configure_ownership", None
+                    )
+                    if configure_ownership is not None:
+                        configure_ownership(
+                            _cua_ownership_role(),
+                            handoff_callback=_release_all_for_ownership_handoff,
+                        )
                 elif backend_name == "noop":  # pragma: no cover
                     backend = _NoopBackend()
                 else:

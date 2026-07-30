@@ -51,7 +51,7 @@ import tempfile
 import threading
 import time
 import uuid
-from pathlib import PureWindowsPath
+from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List, Optional, Tuple
 
 from hermes_cli._subprocess_compat import windows_hide_flags
@@ -1907,10 +1907,19 @@ def _apps_from_windows(windows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 class CuaDriverBackend(ComputerUseBackend):
     """Default computer-use backend. Cross-platform via cua-driver MCP."""
 
-    def __init__(self, permission_mode: str = "standard") -> None:
+    def __init__(
+        self,
+        permission_mode: str = "standard",
+        *,
+        ownership_role: Optional[str] = None,
+        ownership_root: Optional[Path] = None,
+    ) -> None:
         if permission_mode not in {"standard", "unrestricted"}:
             raise ValueError(f"unsupported cua-driver permission mode: {permission_mode}")
         self.permission_mode = permission_mode
+        self._ownership_lease = None
+        if ownership_role:
+            self.configure_ownership(ownership_role, root=ownership_root)
         self._embedded_daemon = (
             _EmbeddedCuaDaemon(resolve_cua_driver_cmd() or "", permission_mode)
             if permission_mode == "unrestricted"
@@ -1969,6 +1978,27 @@ class CuaDriverBackend(ComputerUseBackend):
             self._typed_browser = route
         return route
 
+    def configure_ownership(
+        self,
+        role: str,
+        *,
+        root: Optional[Path] = None,
+        handoff_callback=None,
+    ) -> None:
+        """Bind this not-yet-started backend to the machine-wide CUA lease."""
+        from tools.computer_use.ownership import (
+            CuaOwnershipLease,
+            default_lease_root,
+        )
+
+        lease_root = root or default_lease_root()
+        self._ownership_lease = CuaOwnershipLease(
+            lease_root,
+            role,
+            wait_seconds=15.0 if role == "desktop" else 0.0,
+            handoff_callback=handoff_callback,
+        )
+
     # ── Lifecycle ──────────────────────────────────────────────────
     def start(self) -> None:
         _maybe_nudge_update()
@@ -1987,12 +2017,16 @@ class CuaDriverBackend(ComputerUseBackend):
         import importlib
         importlib.invalidate_caches()
         try:
+            if self._ownership_lease is not None:
+                self._ownership_lease.acquire()
             if self._embedded_daemon is not None:
                 self._embedded_daemon.start()
             self._session.start()
         except Exception:
             if self._embedded_daemon is not None:
                 self._embedded_daemon.stop()
+            if self._ownership_lease is not None:
+                self._ownership_lease.release()
             raise
 
         # Declare the run's session identity to cua-driver. From the
@@ -2047,8 +2081,12 @@ class CuaDriverBackend(ComputerUseBackend):
             try:
                 self._bridge.stop()
             finally:
-                if self._embedded_daemon is not None:
-                    self._embedded_daemon.stop()
+                try:
+                    if self._embedded_daemon is not None:
+                        self._embedded_daemon.stop()
+                finally:
+                    if self._ownership_lease is not None:
+                        self._ownership_lease.release()
 
     def is_available(self) -> bool:
         # cua-driver runs on macOS, Windows, and Linux. The Linux path is
