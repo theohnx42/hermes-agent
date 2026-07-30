@@ -3,7 +3,7 @@ import { type MutableRefObject, useCallback, useEffect, useRef } from 'react'
 import type { NavigateFunction } from 'react-router-dom'
 
 import { revealTreePane } from '@/components/pane-shell/tree/store'
-import { deleteSession, getSessionMessages, setSessionArchived } from '@/hermes'
+import { deleteSession, DESKTOP_SESSION_HYDRATION_LIMIT, getSessionMessages, setSessionArchived } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { type ChatMessage, preserveLocalAssistantErrors, toChatMessages } from '@/lib/chat-messages'
 import { isMissingRpcMethod } from '@/lib/gateway-rpc'
@@ -132,6 +132,12 @@ function applyStoredUsage(stored: { input_tokens?: number | null; output_tokens?
 
   setCurrentUsage(current => ({ ...current, input, output, total: input + output }))
 }
+
+const getSessionHydrationWindow = (storedSessionId: string, profile?: null | string) =>
+  getSessionMessages(storedSessionId, profile, {
+    limit: DESKTOP_SESSION_HYDRATION_LIMIT,
+    tail: true
+  })
 
 function reconcileAuthoritativeMessages(
   authoritativeMessages: SessionResumeResponse['messages'],
@@ -679,7 +685,7 @@ export function useSessionActions({
           // prefetch. Watch mirrors stay live-only by design.
           const persistedTranscriptPromise = isWatchWindow()
             ? null
-            : getSessionMessages(storedSessionId, sessionProfile).catch(() => null)
+            : getSessionHydrationWindow(storedSessionId, sessionProfile).catch(() => null)
 
           setFreshDraftReady(false)
           clearNotifications()
@@ -698,7 +704,8 @@ export function useSessionActions({
             try {
               activated = await requestGateway<SessionResumeResponse>('session.activate', {
                 session_id: cachedRuntimeId,
-                cols: 96
+                cols: 96,
+                history_limit: DESKTOP_SESSION_HYDRATION_LIMIT
               })
             } catch (error) {
               // Compatibility for older backends. Modern backends require
@@ -858,11 +865,12 @@ export function useSessionActions({
         // max(prefetch, resume) instead of their sum. The prefetch paints the
         // transcript as soon as it lands; the RPC binds the runtime id.
         // Watch windows skip the prefetch — lazy resume attaches the live mirror.
-        const prefetchPromise = watchWindow ? null : getSessionMessages(storedSessionId, sessionProfile)
+        const prefetchPromise = watchWindow ? null : getSessionHydrationWindow(storedSessionId, sessionProfile)
 
         const resumePromise = requestGateway<SessionResumeResponse>('session.resume', {
           session_id: storedSessionId,
           cols: 96,
+          history_limit: DESKTOP_SESSION_HYDRATION_LIMIT,
           source: 'desktop',
           // Watch windows attach lazily (live mirror). Every other cold resume
           // gets the gateway's default deferred build: the RPC returns the
@@ -1023,7 +1031,7 @@ export function useSessionActions({
         let fallbackError: unknown = null
 
         try {
-          const fallback = await getSessionMessages(storedSessionId, sessionProfile)
+          const fallback = await getSessionHydrationWindow(storedSessionId, sessionProfile)
 
           if (!isCurrentResume()) {
             return
