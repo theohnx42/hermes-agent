@@ -48,6 +48,7 @@ import subprocess
 import sys
 import threading
 import uuid
+from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List, Optional, Tuple
 
 from tools.computer_use.backend import (
@@ -1616,7 +1617,15 @@ def _ingest_windows(raw_windows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 class CuaDriverBackend(ComputerUseBackend):
     """Default computer-use backend. Cross-platform via cua-driver MCP."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        ownership_role: Optional[str] = None,
+        ownership_root: Optional[Path] = None,
+    ) -> None:
+        self._ownership_lease = None
+        if ownership_role:
+            self.configure_ownership(ownership_role, root=ownership_root)
         self._bridge = _AsyncBridge()
         self._session = _CuaDriverSession(self._bridge)
         # Sticky context — updated by capture(), used by action tools.
@@ -1653,6 +1662,27 @@ class CuaDriverBackend(ComputerUseBackend):
         # MCP server instructions.
         self._session_id: str = f"hermes-{uuid.uuid4().hex[:12]}"
 
+    def configure_ownership(
+        self,
+        role: str,
+        *,
+        root: Optional[Path] = None,
+        handoff_callback=None,
+    ) -> None:
+        """Bind this not-yet-started backend to the machine-wide CUA lease."""
+        from tools.computer_use.ownership import (
+            CuaOwnershipLease,
+            default_lease_root,
+        )
+
+        lease_root = root or default_lease_root()
+        self._ownership_lease = CuaOwnershipLease(
+            lease_root,
+            role,
+            wait_seconds=15.0 if role == "desktop" else 0.0,
+            handoff_callback=handoff_callback,
+        )
+
     # ── Lifecycle ──────────────────────────────────────────────────
     def start(self) -> None:
         _maybe_nudge_update()
@@ -1670,7 +1700,14 @@ class CuaDriverBackend(ComputerUseBackend):
         # machinery's caches are refreshed within this process.
         import importlib
         importlib.invalidate_caches()
-        self._session.start()
+        try:
+            if self._ownership_lease is not None:
+                self._ownership_lease.acquire()
+            self._session.start()
+        except Exception:
+            if self._ownership_lease is not None:
+                self._ownership_lease.release()
+            raise
 
         # Declare the run's session identity to cua-driver. From the
         # cua-driver server instructions: "start_session(session) once
@@ -1721,7 +1758,11 @@ class CuaDriverBackend(ComputerUseBackend):
         try:
             self._session.stop()
         finally:
-            self._bridge.stop()
+            try:
+                self._bridge.stop()
+            finally:
+                if self._ownership_lease is not None:
+                    self._ownership_lease.release()
 
     def is_available(self) -> bool:
         # cua-driver runs on macOS, Windows, and Linux. The Linux path is
@@ -2878,4 +2919,3 @@ class CuaDriverBackend(ComputerUseBackend):
             meta.update(structured)
         return _action_result_from(name, ok, message, meta, structured,
                                    requested_delivery=args.get("delivery_mode"))
-

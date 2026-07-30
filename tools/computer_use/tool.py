@@ -154,6 +154,44 @@ _session_auto_approve: Dict[str, bool] = {}
 _always_allow: Dict[str, set] = {}
 
 
+def _cua_ownership_role() -> str:
+    """Classify the current surface for cross-process CUA arbitration."""
+    explicit = os.environ.get("HERMES_CUA_OWNER_ROLE", "").strip().lower()
+    if explicit in {"desktop", "gateway", "interactive"}:
+        return explicit
+    try:
+        from gateway.session_context import get_session_env
+
+        platform = (
+            get_session_env("HERMES_SESSION_PLATFORM", "")
+            or get_session_env("HERMES_SESSION_SOURCE", "")
+            or ""
+        )
+    except Exception:
+        platform = ""
+    platform = str(platform).strip().lower()
+    if platform == "desktop":
+        return "desktop"
+    if platform and platform not in {"cli", "tui"}:
+        return "gateway"
+    if os.environ.get("HERMES_GATEWAY_SESSION"):
+        return "gateway"
+    return "interactive"
+
+
+def _release_backend_for_ownership_handoff() -> None:
+    """Cooperatively yield this process's single livebase CUA worker."""
+    global _backend
+    with _backend_lock:
+        backend, _backend = _backend, None
+    if backend is None:
+        return
+    try:
+        backend.stop()
+    except Exception:
+        logger.debug("CUA ownership handoff cleanup failed", exc_info=True)
+
+
 def _get_backend() -> ComputerUseBackend:
     global _backend
     with _backend_lock:
@@ -162,6 +200,10 @@ def _get_backend() -> ComputerUseBackend:
             if backend_name in {"cua", "cua-driver", ""}:
                 from tools.computer_use.cua_backend import CuaDriverBackend
                 _backend = CuaDriverBackend()
+                _backend.configure_ownership(
+                    _cua_ownership_role(),
+                    handoff_callback=_release_backend_for_ownership_handoff,
+                )
             elif backend_name == "noop":  # pragma: no cover
                 _backend = _NoopBackend()
             else:
