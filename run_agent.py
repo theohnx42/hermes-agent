@@ -7227,6 +7227,9 @@ def main(
     Toolset Examples:
         - "research": Web search, extract, crawl + vision tools
     """
+    from hermes_cli.maintenance_barrier import enter_process_runtime
+
+    enter_process_runtime()
     print("🤖 AI Agent with Tool Calling")
     print("=" * 50)
     

@@ -62,7 +62,11 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
     )
 
 
+from hermes_cli.maintenance_barrier import write_authorized_generator
+
+
 @contextmanager
+@write_authorized_generator
 def _transaction() -> Iterator[sqlite3.Connection]:
     """Open a connection, commit/rollback on exit, always close.
 

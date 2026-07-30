@@ -2092,6 +2092,10 @@ def repair_db(
         )
 
 
+from hermes_cli.maintenance_barrier import write_authorized, write_authorized_generator
+
+
+@write_authorized
 def connect(
     db_path: Optional[Path] = None,
     *,
@@ -2737,6 +2741,7 @@ def _execute_boundary_with_retry(conn: sqlite3.Connection, sql: str) -> None:
 
 
 @contextlib.contextmanager
+@write_authorized_generator
 def write_txn(conn: sqlite3.Connection):
     """Context manager for an IMMEDIATE write transaction.
 

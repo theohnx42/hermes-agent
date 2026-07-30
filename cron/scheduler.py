@@ -4120,6 +4120,9 @@ def tick(
     Returns:
         Number of jobs executed (0 if another tick is already running)
     """
+    from hermes_cli.maintenance_barrier import enter_process_runtime
+
+    enter_process_runtime()
     lock_dir, lock_file = _get_lock_paths()
     lock_dir.mkdir(parents=True, exist_ok=True)
 

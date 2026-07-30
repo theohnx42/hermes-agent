@@ -247,6 +247,9 @@ def _build_server() -> Any:
 
 def main(argv: Optional[list[str]] = None) -> int:
     """Entry point for `python -m agent.transports.hermes_tools_mcp_server`."""
+    from hermes_cli.maintenance_barrier import enter_process_runtime
+
+    enter_process_runtime()
     argv = argv or sys.argv[1:]
     verbose = "--verbose" in argv or "-v" in argv
 

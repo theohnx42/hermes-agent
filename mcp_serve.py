@@ -950,6 +950,9 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
 
 def run_mcp_server(verbose: bool = False) -> None:
     """Start the Hermes MCP server on stdio."""
+    from hermes_cli.maintenance_barrier import enter_process_runtime
+
+    enter_process_runtime()
     if not _MCP_SERVER_AVAILABLE:
         print(
             "Error: MCP server requires the 'mcp' package.\n"

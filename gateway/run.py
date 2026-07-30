@@ -25639,6 +25639,9 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
 
 def main():
     """CLI entry point for the gateway."""
+    from hermes_cli.maintenance_barrier import enter_process_runtime
+
+    enter_process_runtime()
     # Force UTF-8 stdio on Windows — gateway logs and startup banner would
     # otherwise UnicodeEncodeError on cp1252 consoles.  No-op on POSIX.
     try:

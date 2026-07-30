@@ -11030,6 +11030,9 @@ def cmd_claw(args):
 
 def main():
     """Main entry point for hermes CLI."""
+    from hermes_cli.maintenance_barrier import enter_process_runtime
+
+    enter_process_runtime()
     # Cosmetic: make the process show up as 'hermes' instead of 'python3.11'
     # in ps/top/htop.  Non-fatal — just a nicer UX.
     _set_process_title()
