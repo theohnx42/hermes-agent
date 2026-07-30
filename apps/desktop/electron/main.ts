@@ -9991,8 +9991,13 @@ async function interceptSessionRequestForRemote(request) {
     }
 
     if (profileHasRemoteOverride(profile)) {
+      const forwarded = new URLSearchParams(searchParams)
+
+      forwarded.delete('profile')
+      const forwardedPath = forwarded.size ? `${pathname}?${forwarded.toString()}` : pathname
+
       if (method === 'GET') {
-        return fetchJsonForProfile(profile, pathname)
+        return fetchJsonForProfile(profile, forwardedPath)
       }
 
       const body = request.body && typeof request.body === 'object' ? { ...request.body } : request.body
@@ -10006,8 +10011,10 @@ async function interceptSessionRequestForRemote(request) {
 
     if (globalRemoteActive()) {
       // Single global backend: keep ?profile= so it opens the right state.db.
-      const sep = pathname.includes('?') ? '&' : '?'
-      const path = `${pathname}${sep}profile=${encodeURIComponent(profile)}`
+      const forwarded = new URLSearchParams(searchParams)
+
+      forwarded.set('profile', profile)
+      const path = `${pathname}?${forwarded.toString()}`
 
       if (method === 'GET') {
         return fetchJsonForProfile(null, path)

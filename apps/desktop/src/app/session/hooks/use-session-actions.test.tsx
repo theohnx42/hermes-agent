@@ -1430,7 +1430,7 @@ describe('resumeSession warm-cache mapping integrity', () => {
     const methods = requestGateway.mock.calls.map(([method]) => method)
     expect(methods).toContain('session.activate')
     expect(methods).not.toContain('session.resume')
-    expect(getSessionMessages).toHaveBeenCalledWith('stored-A', undefined)
+    expect(getSessionMessages).toHaveBeenCalledWith('stored-A', undefined, { limit: 500, tail: true })
     expect(runtimeIdByStoredSessionIdRef.current.get('stored-A')).toBe('rt-A')
   })
 
@@ -1500,7 +1500,7 @@ describe('resumeSession warm-cache mapping integrity', () => {
     await resume!('stored-A', true)
 
     expect(requestGateway.mock.calls.map(([method]) => method)).toContain('session.activate')
-    expect(getSessionMessages).toHaveBeenCalledWith('stored-A', undefined)
+    expect(getSessionMessages).toHaveBeenCalledWith('stored-A', undefined, { limit: 500, tail: true })
     expect(resumedState?.messages[0]?.attachmentRefs).toEqual(['@image:/tmp/photo.png'])
   })
 

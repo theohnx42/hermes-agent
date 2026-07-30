@@ -569,6 +569,13 @@ export interface SessionMessage {
 
 export interface SessionMessagesResponse {
   messages: SessionMessage[]
+  pagination?: {
+    has_more_before?: boolean
+    limit?: number | null
+    offset?: number
+    returned?: number
+    total?: number
+  }
   session_id: string
 }
 
@@ -597,6 +604,12 @@ export interface SessionResumeResponse {
     user?: string
   }
   info?: SessionRuntimeInfo
+  history_window?: {
+    has_more_before: boolean
+    limit: number
+    start: number
+    total: number
+  }
   message_count: number
   messages: SessionMessage[]
   resumed: string
