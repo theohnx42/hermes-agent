@@ -116,6 +116,8 @@ auxiliary:
 | `codex_gpt55_autoraise_notice` | `true` | bool | Show the one-time Codex gpt-5.5 autoraise notice. Set `false` to keep the 85% autoraise but suppress the banner |
 | `codex_app_server_auto` | `native` | `native`, `hermes`, `off` | Thread-compaction mode for Codex app-server sessions (see below) |
 | `in_place` | `true` | bool | Compact on the same session id instead of rotating to a new one (see below) |
+| `max_lineage_compressions` | `0` | ≥0 | Successful compactions before a fresh local continuation; 0 disables |
+| `rotate_with_handoff` | `false` | bool | Enable the automatic continuation boundary when the maximum is positive |
 
 ### In-place compaction (single stable session id)
 
@@ -127,6 +129,16 @@ Consumers observe the mode rather than diffing session ids:
 - The gateway re-baselines transcript handling from the agent's rotation-independent `_last_compaction_in_place` flag, not from an id-change diff.
 
 Set `in_place: false` to restore the legacy rotating path, where each compaction commits a new session id linked to the previous one via `parent_session_id`.
+
+For long-lived local sessions that need periodic hard boundaries without giving
+up the safe in-place default, set both
+`compression.max_lineage_compressions` to a positive integer and
+`compression.rotate_with_handoff: true`. The count is persisted with the
+compacted transcript. At the boundary the existing compression-child
+transaction publishes the structured summary/tail, continuation metadata,
+title, and `/goal` move as one SQLite commit, then emits `session:rotate`.
+The new child resets the count. Leaving either setting disabled is
+behavior-neutral.
 
 ### Per-model threshold overrides
 

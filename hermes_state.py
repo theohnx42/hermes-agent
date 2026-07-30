@@ -3126,6 +3126,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         profile_name: str = None,
         compression_lock_holder: str = None,
         require_compression_lease: bool = True,
+        local_rotation: bool = False,
+        lineage_compression_count: Optional[int] = None,
     ) -> None:
         """Atomically close a parent and publish its durable compression child.
 
@@ -3148,7 +3150,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                     f"Compression lease lost before publication: {parent_session_id}"
                 )
             parent = conn.execute(
-                """SELECT ended_at, cwd, git_branch, git_repo_root,
+                """SELECT ended_at, title, cwd, git_branch, git_repo_root,
                           user_id, session_key, chat_id, chat_type,
                           thread_id, display_name, origin_json, profile_name
                    FROM sessions WHERE id = ?""",
@@ -3201,6 +3203,68 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 "UPDATE sessions SET message_count = ?, tool_call_count = ? WHERE id = ?",
                 (total_messages, total_tool_calls, child_session_id),
             )
+            if lineage_compression_count is not None:
+                completed_count = max(0, int(lineage_compression_count))
+                conn.execute(
+                    "INSERT INTO state_meta (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (
+                        self._compression_lineage_meta_key(parent_session_id),
+                        str(completed_count),
+                    ),
+                )
+                conn.execute(
+                    "INSERT INTO state_meta (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (
+                        self._compression_lineage_meta_key(child_session_id),
+                        "0" if local_rotation else str(completed_count),
+                    ),
+                )
+            if local_rotation:
+                # The active continuation owns the human title. Clearing the
+                # ended ancestor first satisfies the uniqueness constraint
+                # while preserving the title exactly on the fresh session.
+                if parent["title"]:
+                    conn.execute(
+                        "UPDATE sessions SET title = NULL WHERE id = ?",
+                        (parent_session_id,),
+                    )
+                    conn.execute(
+                        "UPDATE sessions SET title = ? WHERE id = ?",
+                        (parent["title"], child_session_id),
+                    )
+
+                # /goal is stored in state_meta rather than the sessions row.
+                # Move it inside this same transaction so a crash can expose
+                # either the live parent goal or the complete child goal, never
+                # an ended parent with a missing continuation objective.
+                parent_goal_key = f"goal:{parent_session_id}"
+                child_goal_key = f"goal:{child_session_id}"
+                goal_row = conn.execute(
+                    "SELECT value FROM state_meta WHERE key = ?",
+                    (parent_goal_key,),
+                ).fetchone()
+                if goal_row is not None:
+                    raw_goal = goal_row["value"]
+                    try:
+                        parent_goal = json.loads(raw_goal)
+                    except (TypeError, json.JSONDecodeError):
+                        parent_goal = None
+                    conn.execute(
+                        "INSERT INTO state_meta (key, value) VALUES (?, ?) "
+                        "ON CONFLICT(key) DO NOTHING",
+                        (child_goal_key, raw_goal),
+                    )
+                    if isinstance(parent_goal, dict):
+                        parent_goal["status"] = "cleared"
+                        conn.execute(
+                            "UPDATE state_meta SET value = ? WHERE key = ?",
+                            (
+                                json.dumps(parent_goal, ensure_ascii=False),
+                                parent_goal_key,
+                            ),
+                        )
             updated = conn.execute(
                 "UPDATE sessions SET ended_at = ?, end_reason = 'compression' "
                 "WHERE id = ? AND ended_at IS NULL",
@@ -3212,6 +3276,20 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 )
 
         self._execute_write(_do)
+
+    @staticmethod
+    def _compression_lineage_meta_key(session_id: str) -> str:
+        return f"compression-lineage-count:{session_id}"
+
+    def get_compression_lineage_count(self, session_id: str) -> int:
+        """Return successful compactions since the latest local rotation."""
+        if not session_id:
+            return 0
+        raw = self.get_meta(self._compression_lineage_meta_key(session_id))
+        try:
+            return max(0, int(raw or 0))
+        except (TypeError, ValueError):
+            return 0
 
     def end_session(self, session_id: str, end_reason: str) -> None:
         """Mark a session as ended.
@@ -6025,7 +6103,11 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             return cursor.fetchone() is not None
 
     def archive_and_compact(
-        self, session_id: str, compacted_messages: List[Dict[str, Any]]
+        self,
+        session_id: str,
+        compacted_messages: List[Dict[str, Any]],
+        *,
+        lineage_compression_count: Optional[int] = None,
     ) -> int:
         """Non-destructive in-place compaction for a single durable session id.
 
@@ -6072,6 +6154,15 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 "UPDATE sessions SET message_count = ?, tool_call_count = ? WHERE id = ?",
                 (inserted, tool_calls_total, session_id),
             )
+            if lineage_compression_count is not None:
+                conn.execute(
+                    "INSERT INTO state_meta (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (
+                        self._compression_lineage_meta_key(session_id),
+                        str(max(0, int(lineage_compression_count))),
+                    ),
+                )
             return inserted
 
         return self._execute_write(_do)
