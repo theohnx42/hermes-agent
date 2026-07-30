@@ -19,7 +19,10 @@ const PLATFORM = process.platform
 // launch via install.ps1 / install.sh, per the Phase 1 thin-installer flow).
 const APP = (() => {
   if (PLATFORM === 'darwin') {
-    const appPath = path.join(RELEASE_ROOT, `mac-${ARCH}`, 'Hermes.app')
+    // electron-builder 26 writes the unpacked macOS app to release/mac for
+    // single-architecture builds. The artifact filename still carries ARCH,
+    // but the unpacked directory does not.
+    const appPath = path.join(RELEASE_ROOT, 'mac', 'Hermes.app')
     return {
       appPath,
       binary: path.join(appPath, 'Contents', 'MacOS', 'Hermes'),
