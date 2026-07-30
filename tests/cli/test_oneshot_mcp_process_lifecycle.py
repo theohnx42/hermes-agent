@@ -1,5 +1,6 @@
 """End-to-end one-shot exit and MCP process-family lifecycle regression."""
 
+import json
 import os
 from pathlib import Path
 import signal
@@ -8,6 +9,8 @@ import sys
 import time
 
 import pytest
+
+from hermes_state import SessionDB
 
 
 CHILD_PROGRAM = r"""
@@ -154,3 +157,54 @@ def test_oneshot_exits_and_restores_mcp_family_baseline_within_ten_seconds(
     finally:
         _force_cleanup(root_pid)
         _force_cleanup(grandchild_pid)
+
+
+def test_oneshot_process_cleanup_does_not_end_independent_rotation_tip(
+    monkeypatch, tmp_path
+):
+    """Process-global teardown owns MCP children, never durable chat lifecycle."""
+    parent = "independent-parent"
+    child = "independent-rotation-tip"
+    goal = {"goal": "survive unrelated one-shot teardown", "status": "active"}
+    db_path = tmp_path / "state.db"
+    db = SessionDB(db_path=db_path)
+    db.create_session(parent, source="webui", cwd="/work/project")
+    db.set_session_title(parent, "Independent rotated session")
+    db.set_meta(f"goal:{parent}", json.dumps(goal))
+    assert db.try_acquire_compression_lock(parent, "winner", ttl_seconds=60)
+    db.publish_compression_child(
+        parent_session_id=parent,
+        child_session_id=child,
+        source="webui",
+        messages=[{"role": "user", "content": "continue independently"}],
+        compression_lock_holder="winner",
+        local_rotation=True,
+        lineage_compression_count=3,
+    )
+    db.close()
+
+    from agent import auxiliary_client
+    from hermes_cli import main
+    from tools import async_delegation, browser_tool, terminal_tool
+
+    monkeypatch.setattr(terminal_tool, "cleanup_all_environments", lambda: None)
+    monkeypatch.setattr(async_delegation, "interrupt_all", lambda **_kwargs: None)
+    monkeypatch.setattr(browser_tool, "_emergency_cleanup_all_sessions", lambda: None)
+    monkeypatch.setattr(auxiliary_client, "shutdown_cached_clients", lambda: None)
+    monkeypatch.setattr(main, "_oneshot_cleanup_done", False)
+
+    main._cleanup_oneshot_runtime()
+
+    reopened = SessionDB(db_path=db_path)
+    try:
+        tip = reopened.get_session(child)
+        assert reopened.resolve_resume_session_id(parent) == child
+        assert tip["ended_at"] is None
+        assert tip["end_reason"] is None
+        assert tip["title"] == "Independent rotated session"
+        assert json.loads(reopened.get_meta(f"goal:{child}")) == goal
+        assert reopened.get_messages_as_conversation(child)[-1]["content"] == (
+            "continue independently"
+        )
+    finally:
+        reopened.close()
