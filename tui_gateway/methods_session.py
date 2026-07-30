@@ -536,11 +536,14 @@ def _(rid, params: dict) -> dict:
         auto_continue = _maybe_schedule_auto_continue(sid, record, target)
 
         messages = _history_to_messages(display_history)
+        display_window, history_window = _bounded_history_window(
+            messages, history_limit
+        )
         payload = {
             "session_id": sid,
             "resumed": target,
             "message_count": len(messages),
-            "messages": messages,
+            "messages": display_window,
             "info": _lazy_resume_info(
                 cwd,
                 model=model_override.get("model") or "",
@@ -555,6 +558,8 @@ def _(rid, params: dict) -> dict:
         }
         if auto_continue is not None:
             payload["auto_continue"] = auto_continue
+        if history_window is not None:
+            payload["history_window"] = history_window
         return _ok(rid, payload)
 
     # Build the agent OUTSIDE the lock — _make_agent can block for seconds
