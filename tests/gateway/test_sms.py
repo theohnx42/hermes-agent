@@ -20,6 +20,27 @@ from gateway.config import Platform, PlatformConfig
 class TestSmsConfigLoading:
     """Verify _apply_env_overrides wires SMS correctly."""
 
+    def test_explicitly_disabled_sms_stays_disabled_with_legacy_env(self):
+        from gateway.config import GatewayConfig, _apply_env_overrides
+
+        env = {
+            "TWILIO_ACCOUNT_SID": "AC-retired",
+            "TWILIO_AUTH_TOKEN": "stale-secret",
+        }
+        config = GatewayConfig(
+            platforms={
+                Platform.SMS: PlatformConfig(
+                    enabled=False,
+                    extra={"_enabled_explicit": True},
+                )
+            }
+        )
+        with patch.dict(os.environ, env, clear=False):
+            _apply_env_overrides(config)
+
+        assert config.platforms[Platform.SMS].enabled is False
+        assert config.platforms[Platform.SMS].api_key is None
+
 
     def test_env_overrides_set_home_channel(self):
         from gateway.config import load_gateway_config

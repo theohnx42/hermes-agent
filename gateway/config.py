@@ -2115,9 +2115,12 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
     twilio_sid = getenv("TWILIO_ACCOUNT_SID")
     if twilio_sid:
         if Platform.SMS not in config.platforms:
-            config.platforms[Platform.SMS] = PlatformConfig()
-        config.platforms[Platform.SMS].enabled = True
-        config.platforms[Platform.SMS].api_key = getenv("TWILIO_AUTH_TOKEN", "")
+            config.platforms[Platform.SMS] = PlatformConfig(enabled=True)
+        sms_config = config.platforms[Platform.SMS]
+        # Explicit YAML retirement wins over stale service credentials. When
+        # SMS is absent, legacy environment-only setup remains compatible.
+        if sms_config.enabled:
+            sms_config.api_key = getenv("TWILIO_AUTH_TOKEN", "")
     sms_home = getenv("SMS_HOME_CHANNEL")
     if sms_home and Platform.SMS in config.platforms:
         config.platforms[Platform.SMS].home_channel = HomeChannel(
