@@ -6466,6 +6466,10 @@ def shutdown_mcp_servers():
             _server_connect_retry_after.clear()
             _server_connect_failures.clear()
         _stop_mcp_loop()
+        # A connect/discovery race can leave a stdio child tracked before its
+        # MCPServerTask is published in _servers. Full shutdown still owns
+        # that child; the old fast path returned here and leaked it.
+        _kill_orphaned_mcp_children(include_active=True)
         return
 
     async def _shutdown():
@@ -6512,9 +6516,54 @@ def shutdown_mcp_servers():
     _stop_mcp_loop()
 
 
+def shutdown_mcp_servers_bounded(timeout: float = 5.0) -> bool:
+    """Bound full MCP teardown for finite one-shot process owners.
+
+    Gateway and interactive sessions continue to use
+    :func:`shutdown_mcp_servers` directly. A one-shot process has a stronger
+    contract: after its final response (or failure) it must restore its MCP
+    process-family baseline promptly. Run normal teardown on a daemon thread,
+    then perform the tracked-family sweep even if that teardown wedged.
+
+    Returns ``True`` when graceful teardown completed inside *timeout* and
+    ``False`` when the emergency sweep was required.
+    """
+    timeout = max(0.0, float(timeout))
+    finished = threading.Event()
+
+    def _shutdown() -> None:
+        try:
+            shutdown_mcp_servers()
+        finally:
+            finished.set()
+
+    worker = threading.Thread(
+        target=_shutdown,
+        name="oneshot-mcp-shutdown",
+        daemon=True,
+    )
+    worker.start()
+    graceful = finished.wait(timeout)
+    if not graceful:
+        logger.warning(
+            "One-shot MCP shutdown exceeded %.1fs; forcing tracked process "
+            "families closed before exit",
+            timeout,
+        )
+    # Idempotent after a graceful shutdown. On a timeout this deliberately
+    # reads the process-local tracking maps without waiting forever for a
+    # wedged MCP lock; the snapshot helper uses a short bounded lock attempt.
+    _kill_orphaned_mcp_children(
+        include_active=True,
+        tracking_lock_timeout=0.25,
+    )
+    return graceful
+
+
 def _kill_orphaned_mcp_children(
     include_active: bool = False,
     server_name: Optional[str] = None,
+    tracking_lock_timeout: Optional[float] = None,
 ) -> None:
     """Best-effort graceful shutdown of stdio MCP subprocesses to reap orphans.
 
@@ -6531,8 +6580,8 @@ def _kill_orphaned_mcp_children(
     On POSIX, signals are sent via ``os.killpg`` to the spawn-time pgid when
     one is tracked, so reparented grandchildren in the same process group
     (e.g. ``claude mcp serve`` spawned by a stdio MCP wrapper that exited
-    first) are reaped alongside the direct child.  Falls back to ``os.kill``
-    on Windows and when no pgid is recorded.
+    first) are reaped alongside the direct child. On Windows, psutil snapshots
+    and terminates each tracked root's recursive process family.
 
     When ``server_name`` is set, only orphaned PIDs known to belong to that
     MCP server are reaped. This lets stdio reconnects clean up their previous
@@ -6544,7 +6593,16 @@ def _kill_orphaned_mcp_children(
     """
     import signal as _signal
 
-    with _lock:
+    acquired = False
+    if tracking_lock_timeout is None:
+        _lock.acquire()
+        acquired = True
+    else:
+        try:
+            acquired = _lock.acquire(timeout=max(0.0, tracking_lock_timeout))
+        except TypeError:
+            acquired = _lock.acquire(False)
+    try:
         pids: Dict[int, str] = {}
         for opid in _orphan_stdio_pids:
             owner = _orphan_stdio_pid_servers.get(opid, "orphan")
@@ -6570,6 +6628,9 @@ def _kill_orphaned_mcp_children(
         pgids: Dict[int, int] = {pid: _stdio_pgids[pid] for pid in pids if pid in _stdio_pgids}
         for pid in pgids:
             _stdio_pgids.pop(pid, None)
+    finally:
+        if acquired:
+            _lock.release()
 
     # Fast path: no tracked stdio PIDs to reap. Skip the SIGTERM/sleep/SIGKILL
     # dance entirely — otherwise every MCP-free shutdown pays a 2s sleep tax.
@@ -6617,6 +6678,10 @@ def _kill_orphaned_mcp_children(
         except (ProcessLookupError, PermissionError, OSError):
             pass
 
+    if sys.platform == "win32":
+        _terminate_windows_mcp_families(pids)
+        return
+
     # Phase 1: SIGTERM (graceful)
     for pid, server_name in pids.items():
         _send_signal(pid, _signal.SIGTERM, server_name)
@@ -6638,6 +6703,62 @@ def _kill_orphaned_mcp_children(
             "Force-killed MCP process %d (%s) after SIGTERM timeout",
             pid, server_name,
         )
+
+
+def _terminate_windows_mcp_families(
+    pids: Dict[int, str],
+    *,
+    grace_seconds: float = 2.0,
+) -> None:
+    """Terminate tracked Windows MCP roots and every live descendant.
+
+    Native Windows has no ``killpg`` equivalent and ``os.kill(pid, 0)`` is
+    destructive. MCP wrappers commonly spawn Node/Python grandchildren, so
+    terminating only the direct stdio child leaves the real server alive.
+    psutil's recursive family snapshot is the portable Windows process-tree
+    primitive. Descendants are terminated before roots, then any survivors
+    are killed after a bounded grace period.
+    """
+    try:
+        import psutil
+    except ImportError:
+        import signal as _signal
+
+        for pid in pids:
+            try:
+                os.kill(pid, _signal.SIGTERM)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+        return
+
+    family = []
+    seen = set()
+    for pid in pids:
+        try:
+            root = psutil.Process(pid)
+            members = list(reversed(root.children(recursive=True))) + [root]
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            continue
+        for process in members:
+            if process.pid in seen:
+                continue
+            seen.add(process.pid)
+            family.append(process)
+
+    for process in family:
+        try:
+            process.terminate()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            pass
+    try:
+        _, alive = psutil.wait_procs(family, timeout=max(0.0, grace_seconds))
+    except Exception:
+        alive = family
+    for process in alive:
+        try:
+            process.kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            pass
 
 
 def _stop_mcp_loop_if_idle() -> bool:
