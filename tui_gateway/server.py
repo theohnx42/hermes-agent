@@ -7514,6 +7514,7 @@ def _(rid, params: dict) -> dict:
         cols = int(params.get("cols", 80))
     except (TypeError, ValueError):
         cols = 80
+    history_limit = params.get("history_limit")
     # ``profile`` (app-global remote mode): resume a session that lives in another
     # local profile's state.db. None/own profile → the launch profile (unchanged).
     profile = (params.get("profile") or "").strip() or None
@@ -7580,6 +7581,7 @@ def _(rid, params: dict) -> dict:
             sid,
             session,
             cols=cols,
+            history_limit=history_limit,
             touch=True,
             transport=current_transport() or _stdio_transport,
         )
@@ -7652,22 +7654,25 @@ def _(rid, params: dict) -> dict:
         except Exception:
             logger.debug("child-watch display projection read failed", exc_info=True)
             display_history = history
-        messages = _history_to_messages(display_history)
-        return _ok(
-            rid,
-            {
-                "session_id": sid,
-                "resumed": target,
-                "message_count": len(messages),
-                "messages": messages,
-                "info": _lazy_resume_info(cwd, profile=profile),
-                "inflight": None,
-                "running": child_running,
-                "session_key": target,
-                "started_at": record["created_at"],
-                "status": "streaming" if child_running else "idle",
-            },
+        display_window, history_window = _bounded_history_window(
+            display_history, history_limit
         )
+        messages = _history_to_messages(display_window)
+        payload = {
+            "session_id": sid,
+            "resumed": target,
+            "message_count": len(display_history),
+            "messages": messages,
+            "info": _lazy_resume_info(cwd, profile=profile),
+            "inflight": None,
+            "running": child_running,
+            "session_key": target,
+            "started_at": record["created_at"],
+            "status": "streaming" if child_running else "idle",
+        }
+        if history_window is not None:
+            payload["history_window"] = history_window
+        return _ok(rid, payload)
 
     # Cold resume default: register the live session and read its stored
     # transcript, but build the agent OFF the response path. _make_agent can
@@ -7732,11 +7737,14 @@ def _(rid, params: dict) -> dict:
         _schedule_session_cap_enforcement()  # trim detached idle sessions over the cap
         auto_continue = _maybe_schedule_auto_continue(sid, record, target)
 
-        messages = _history_to_messages(display_history)
+        display_window, history_window = _bounded_history_window(
+            display_history, history_limit
+        )
+        messages = _history_to_messages(display_window)
         payload = {
             "session_id": sid,
             "resumed": target,
-            "message_count": len(messages),
+            "message_count": len(display_history),
             "messages": messages,
             "info": _lazy_resume_info(
                 cwd,
@@ -7752,6 +7760,8 @@ def _(rid, params: dict) -> dict:
         }
         if auto_continue is not None:
             payload["auto_continue"] = auto_continue
+        if history_window is not None:
+            payload["history_window"] = history_window
         return _ok(rid, payload)
 
     # Build the agent OUTSIDE the lock — _make_agent can block for seconds
@@ -7832,6 +7842,7 @@ def _(rid, params: dict) -> dict:
                 other_sid,
                 other_session,
                 cols=cols,
+                history_limit=history_limit,
                 touch=True,
                 transport=current_transport() or _stdio_transport,
             )
@@ -7884,11 +7895,12 @@ def _(rid, params: dict) -> dict:
     auto_continue = (
         _maybe_schedule_auto_continue(sid, session, target) if session else None
     )
+    display_window, history_window = _bounded_history_window(messages, history_limit)
     payload = {
         "session_id": sid,
         "resumed": target,
         "message_count": len(messages),
-        "messages": messages,
+        "messages": display_window,
         "info": _session_info(agent, session),
         "inflight": None,
         "running": False,
@@ -7898,6 +7910,8 @@ def _(rid, params: dict) -> dict:
     }
     if auto_continue is not None:
         payload["auto_continue"] = auto_continue
+    if history_window is not None:
+        payload["history_window"] = history_window
     return _ok(rid, payload)
 
 
@@ -8101,11 +8115,44 @@ def _live_visible_history(session: dict, db, in_memory_fallback: list[dict]) -> 
     return in_memory_fallback
 
 
+DESKTOP_HISTORY_WINDOW_MAX = 500
+
+
+def _bounded_history_window(
+    history: list[dict],
+    requested_limit: object = None,
+) -> tuple[list[dict], dict | None]:
+    """Return a renderer-safe tail window without mutating authoritative history.
+
+    ``None`` preserves the legacy full-history contract for TUI/older clients.
+    Desktop opts in with ``history_limit``.  The cursor is an absolute offset
+    into the verbatim display projection, so older pages remain addressable
+    through the REST transcript endpoint without retaining their renderer
+    objects.
+    """
+    if requested_limit is None:
+        return history, None
+    try:
+        limit = max(1, min(int(requested_limit), DESKTOP_HISTORY_WINDOW_MAX))
+    except (TypeError, ValueError):
+        limit = DESKTOP_HISTORY_WINDOW_MAX
+    total = len(history)
+    start = max(0, total - limit)
+    window = history[start:]
+    return window, {
+        "has_more_before": start > 0,
+        "limit": limit,
+        "start": start,
+        "total": total,
+    }
+
+
 def _live_session_payload(
     sid: str,
     session: dict,
     *,
     cols: int | None = None,
+    history_limit: object = None,
     touch: bool = False,
     transport: Transport | None = None,
 ) -> dict:
@@ -8126,10 +8173,11 @@ def _live_session_payload(
     # matches the eager session.resume + REST transcript; the DB has its own
     # lock, so read it outside the session history lock.
     history = _live_visible_history(session, _get_db(), in_memory_history)
+    display_window, history_window = _bounded_history_window(history, history_limit)
     payload = {
         "info": _fallback_session_info(session),
         "message_count": len(history),
-        "messages": _history_to_messages(history),
+        "messages": _history_to_messages(display_window),
         "running": running,
         "session_id": sid,
         "session_key": _session_lookup_key(session, fallback=sid),
@@ -8140,6 +8188,8 @@ def _live_session_payload(
         payload["inflight"] = inflight
     if queued:
         payload["queued"] = queued
+    if history_window is not None:
+        payload["history_window"] = history_window
     return payload
 
 
@@ -8199,6 +8249,7 @@ def _(rid, params: dict) -> dict:
         _live_session_payload(
             sid,
             session,
+            history_limit=params.get("history_limit"),
             touch=True,
             transport=current_transport() or _stdio_transport,
         ),

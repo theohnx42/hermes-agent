@@ -333,6 +333,21 @@ describe('Hermes REST helpers', () => {
     })
   })
 
+  it('requests a bounded tail page while retaining an older-history cursor', async () => {
+    api.mockResolvedValue({
+      messages: [],
+      pagination: { has_more_before: true, limit: 500, offset: 199500, returned: 500, total: 200000 },
+      session_id: 'session-1'
+    })
+
+    await getSessionMessages('session-1', 'xiaoxuxu', { limit: 500, tail: true })
+
+    expect(api).toHaveBeenCalledWith({
+      path: '/api/sessions/session-1/messages?profile=xiaoxuxu&limit=500&tail=true',
+      profile: 'xiaoxuxu'
+    })
+  })
+
   it('bounds blocking TTS synthesis timeouts by text length', () => {
     expect(audioSpeakRequestTimeoutMs('short message')).toBe(AUDIO_SPEAK_MIN_REQUEST_TIMEOUT_MS)
     expect(audioSpeakRequestTimeoutMs('x'.repeat(8_000))).toBe(280_000)

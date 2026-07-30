@@ -622,8 +622,38 @@ export function getSession(id: string, profile?: string | null): Promise<Session
 // this GET to the remote backend (which serves its own state.db); for a local
 // profile the primary opens that profile's state.db via ?profile=. Omit for
 // the current/default profile.
-export function getSessionMessages(id: string, profile?: string | null): Promise<SessionMessagesResponse> {
-  const suffix = profile ? `?profile=${encodeURIComponent(profile)}` : ''
+export interface SessionMessagesPageOptions {
+  limit?: number
+  offset?: number
+  tail?: boolean
+}
+
+export const DESKTOP_SESSION_HYDRATION_LIMIT = 500
+
+export function getSessionMessages(
+  id: string,
+  profile?: string | null,
+  options?: SessionMessagesPageOptions
+): Promise<SessionMessagesResponse> {
+  const params = new URLSearchParams()
+
+  if (profile) {
+    params.set('profile', profile)
+  }
+
+  if (options?.limit != null) {
+    params.set('limit', String(options.limit))
+  }
+
+  if (options?.offset != null) {
+    params.set('offset', String(options.offset))
+  }
+
+  if (options?.tail) {
+    params.set('tail', 'true')
+  }
+
+  const suffix = params.size ? `?${params.toString()}` : ''
 
   return window.hermesDesktop.api<SessionMessagesResponse>({
     ...(profile ? { profile } : {}),
