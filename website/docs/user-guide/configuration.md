@@ -787,6 +787,8 @@ compression:
   protect_last_n: 20                                # Min recent messages to keep uncompressed
   protect_first_n: 3                                # Non-system head messages pinned across compactions (0 = pin nothing)
   in_place: true                                    # Compact on the same session id (no rotation) — see below
+  max_lineage_compressions: 0                       # Compactions before a fresh local continuation (0 = disabled)
+  rotate_with_handoff: false                        # Opt in to the automatic local continuation boundary
   idle_compact_after_seconds: 0                     # Opt-in idle compaction (0 = disabled) — see below
   hygiene_hard_message_limit: 5000                  # Gateway safety valve — see below
   hygiene_timeout_seconds: 30                       # Max seconds of NO summary-model output before hygiene compression is cut off
@@ -821,6 +823,23 @@ Older configs with `compression.summary_model`, `compression.summary_provider`, 
 `protect_first_n` controls how many **non-system** head messages are pinned across every compaction. Default `3` — the opening user/assistant exchange survives every summarizer pass so the original goal stays visible. On long-running rolling-compaction sessions where the opening turn is no longer relevant, set `protect_first_n: 0` to pin nothing but the system prompt + summary + tail. The system prompt itself is always preserved regardless of this setting.
 
 `in_place` (default `true`) controls what happens to the session identity when compaction fires. When `true`, compaction rewrites the message list and rebuilds the system prompt **without rotating the session id** — the conversation keeps one durable id for its whole life (no `parent_session_id` chain, no `name #2` / `#3` renumbering in session lists). Compaction is non-destructive: the live context is compacted, but the pre-compaction turns are soft-archived under the same id (marked inactive/compacted) — still searchable via `session_search` and recoverable, not deleted. Hooks see the mode via the `in_place` field on the `session:compress` event. Set `in_place: false` to restore the legacy behavior where each compaction rotates to a new session id linked to the old one.
+
+`max_lineage_compressions` and `rotate_with_handoff` provide an opt-in hard
+boundary for very long local conversations. Both must be enabled: the maximum
+must be greater than zero and `rotate_with_handoff` must be `true`. At the
+boundary Hermes atomically closes the current tip and publishes a fresh local
+child linked by `parent_session_id`. The child starts with the normal structured
+compaction handoff and protected tail. That handoff records the goal, active
+state, blockers/open work, key decisions, relevant files, and unresolved latest
+user request. The same transaction preserves the title, working directory and
+Git metadata, profile and platform routing, and moves persistent `/goal` state
+to the child. A crash exposes either the complete old live session or the
+complete new continuation, never an ended parent without its child. The child
+resets the counter and begins a new interval. Defaults (`0` and `false`) preserve
+normal in-place behavior.
+
+Automatic local rotation emits the normal `session:compress` hook followed by a
+distinct `session:rotate` hook.
 
 `threshold_tokens` sets an optional **absolute token cap** for the compression trigger. When set, compression fires at the lower of the ratio-based `threshold` and this absolute count — so compression never fires later than the user's preferred token number regardless of which model is active. This solves the problem where switching between models with different context windows (e.g. 1M → 400K) shifts the absolute trigger point. The cap is clamped to the model's context length, so setting it higher than the model supports is safe — the ratio-based threshold is used instead. Default `null` (disabled — ratio-based threshold only). The cap survives model switches and fallback activations.
 

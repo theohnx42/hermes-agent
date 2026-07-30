@@ -1963,6 +1963,16 @@ def init_agent(
     compression_in_place = is_truthy_value(
         _compression_cfg.get("in_place"), default=True
     )
+    compression_max_lineage_compressions = max(
+        0,
+        _parse_prune_int(
+            _compression_cfg.get("max_lineage_compressions", 0),
+            0,
+        ),
+    )
+    compression_rotate_with_handoff = is_truthy_value(
+        _compression_cfg.get("rotate_with_handoff"), default=False
+    )
     codex_app_server_auto_compaction = str(
         _compression_cfg.get("codex_app_server_auto", "native") or "native"
     ).lower()
@@ -2418,6 +2428,10 @@ def init_agent(
             pass
     agent.compression_enabled = compression_enabled
     agent.compression_in_place = compression_in_place
+    agent.compression_max_lineage_compressions = (
+        compression_max_lineage_compressions
+    )
+    agent.compression_rotate_with_handoff = compression_rotate_with_handoff
     agent.codex_app_server_auto_compaction = codex_app_server_auto_compaction
     agent.max_compression_attempts = compression_max_attempts
     agent.compression_idle_compact_after_seconds = (
