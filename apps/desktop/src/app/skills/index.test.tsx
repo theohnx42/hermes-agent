@@ -60,19 +60,18 @@ function toolset(overrides: Record<string, unknown> = {}) {
 
 async function renderSkills() {
   const { SkillsView } = await import('./index')
-  let result: ReturnType<typeof render>
-  await act(async () => {
-    result = render(
-      // SkillsView reads skills/toolsets via useQuery, so it needs a provider.
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={['/skills?tab=toolsets']}>
-          <SkillsView />
-        </MemoryRouter>
-      </QueryClientProvider>
-    )
-  })
-
-  return result!
+  // Testing Library's render already runs inside act(). Wrapping it in an
+  // additional async act leaves React Query updates sharing an outer act
+  // scope across tests, which can time out the first test and prevent cleanup
+  // before the next test renders.
+  return render(
+    // SkillsView reads skills/toolsets via useQuery, so it needs a provider.
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={['/skills?tab=toolsets']}>
+        <SkillsView />
+      </MemoryRouter>
+    </QueryClientProvider>
+  )
 }
 
 beforeEach(() => {
