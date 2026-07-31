@@ -287,7 +287,8 @@ function launchFresh() {
 // Validate the packaged bundle matches the thin-installer architecture:
 //   - The Hermes Agent Python payload is NOT shipped (it's fetched at first
 //     launch via install.ps1's stage protocol).
-//   - install-stamp.json IS shipped in resources/ with a valid commit + branch.
+//   - install-stamp.json IS shipped in resources/ with a valid commit and
+//     either a branch or clean detached-HEAD provenance.
 //   - node-pty IS shipped inside app.asar.unpacked/dist/node_modules/node-pty
 //     with package.json + lib/ + at least one .node binary (the renderer's
 //     integrated terminal needs this; see Phase 1F.6).
@@ -308,7 +309,10 @@ function validateBundle() {
     )
   }
 
-  // Positive assertion: install-stamp.json carries a sane commit + branch
+  // Positive assertion: install-stamp.json carries a sane commit plus either
+  // a branch or an exact clean detached-HEAD pin. Immutable release builds are
+  // intentionally detached, and write-build-stamp.mjs represents that state
+  // with branch: null.
   const stampPath = path.join(APP.resourcesPath, 'install-stamp.json')
   if (!exists(stampPath)) {
     die(`Missing install-stamp.json (required for first-launch bootstrap pinning): ${stampPath}`)
@@ -322,8 +326,11 @@ function validateBundle() {
   if (!stamp.commit || typeof stamp.commit !== 'string' || stamp.commit.length < 7) {
     die(`install-stamp.json is missing a usable commit field: ${JSON.stringify(stamp)}`)
   }
-  if (!stamp.branch || typeof stamp.branch !== 'string') {
-    die(`install-stamp.json is missing the branch field: ${JSON.stringify(stamp)}`)
+  const hasBranch = typeof stamp.branch === 'string' && stamp.branch.trim().length > 0
+  const isPinnedCommit = /^[0-9a-f]{40}$/i.test(stamp.commit) && !/^0+$/.test(stamp.commit)
+  const isCleanDetachedPin = stamp.branch === null && isPinnedCommit && stamp.dirty === false
+  if (!hasBranch && !isCleanDetachedPin) {
+    die(`install-stamp.json has unusable branch/provenance fields: ${JSON.stringify(stamp)}`)
   }
 
   // Positive assertion: node-pty native deps shipped
@@ -393,7 +400,9 @@ function printArtifacts(options = {}) {
   }
   console.log(`  runtime: ${runtimeRoot}`)
   if (stamp) {
-    console.log(`  install-stamp: ${stamp.commit.slice(0, 12)} on ${stamp.branch}`)
+    console.log(
+      `  install-stamp: ${stamp.commit.slice(0, 12)} ${stamp.branch ? `on ${stamp.branch}` : '(detached)'}`
+    )
   }
   if (options.nodeBinaries && options.nodeBinaries.length > 0) {
     console.log(`  node-pty binaries: ${options.nodeBinaries.join(', ')}`)
