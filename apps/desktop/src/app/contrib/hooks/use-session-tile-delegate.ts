@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 
-import { getSessionMessages, PROMPT_SUBMIT_REQUEST_TIMEOUT_MS } from '@/hermes'
+import { DESKTOP_SESSION_HYDRATION_LIMIT, getSessionMessages, PROMPT_SUBMIT_REQUEST_TIMEOUT_MS } from '@/hermes'
 import { toChatMessages } from '@/lib/chat-messages'
 import { publishSessionState, setSessionTileDelegate } from '@/store/session-states'
 import type { SessionResumeResponse } from '@/types/hermes'
@@ -75,10 +75,14 @@ export function useSessionTileDelegate({
         const profile = await resolveSessionProfile(storedSessionId)
 
         const [prefetch, resumed] = await Promise.all([
-          getSessionMessages(storedSessionId, profile).catch(() => null),
+          getSessionMessages(storedSessionId, profile, {
+            limit: DESKTOP_SESSION_HYDRATION_LIMIT,
+            tail: true
+          }).catch(() => null),
           requestGateway<SessionResumeResponse>('session.resume', {
             session_id: storedSessionId,
             cols: 96,
+            history_limit: DESKTOP_SESSION_HYDRATION_LIMIT,
             ...(profile ? { profile } : {})
           })
         ])

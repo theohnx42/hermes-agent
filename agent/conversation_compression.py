@@ -1406,6 +1406,36 @@ def compress_context(
     # NOT fall back to rotation mode — that re-enables the pre-lease drift
     # path and can wedge busy sessions that never set the flag.
     in_place = bool(getattr(agent, "compression_in_place", True))
+    _max_lineage_compressions = max(
+        0,
+        int(getattr(agent, "compression_max_lineage_compressions", 0) or 0),
+    )
+    _rotate_with_handoff = bool(
+        getattr(agent, "compression_rotate_with_handoff", False)
+    )
+    _persisted_lineage_count = 0
+    if agent._session_db and agent.session_id:
+        try:
+            _persisted_lineage_count = (
+                agent._session_db.get_compression_lineage_count(agent.session_id)
+            )
+        except Exception:
+            _persisted_lineage_count = 0
+    _next_lineage_count = _persisted_lineage_count + 1
+    _local_auto_rotation = bool(
+        in_place
+        and _rotate_with_handoff
+        and _max_lineage_compressions > 0
+        and _next_lineage_count >= _max_lineage_compressions
+        and agent._session_db
+        and agent.session_id
+    )
+    if _local_auto_rotation:
+        # Reuse the hardened compression-child transaction. The structured
+        # compaction summary already carries Goal, Active State, Blocked,
+        # Key Decisions, Relevant Files, and unresolved user asks; publishing
+        # it as the fresh child's first context is the local handoff.
+        in_place = False
     # Set True once the in-place DB write actually completes (the DB block can
     # raise and skip it). Surfaced to the gateway via agent._last_compaction_in_place.
     compacted_in_place = False
@@ -2081,7 +2111,11 @@ def compress_context(
                     # for search/recovery (Teknium review — keep one durable id
                     # WITHOUT destroying history, unlike a hard replace_messages).
                     # See #38763.
-                    agent._session_db.archive_and_compact(agent.session_id, compressed)
+                    agent._session_db.archive_and_compact(
+                        agent.session_id,
+                        compressed,
+                        lineage_compression_count=_next_lineage_count,
+                    )
                     split_status = "in_place_committed"
                     # Reset the flush identity set so the next turn's appends are
                     # diffed against the COMPACTED transcript: the compacted dicts
@@ -2144,19 +2178,39 @@ def compress_context(
                         f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_"
                         f"{uuid.uuid4().hex[:6]}"
                     )
+                    _child_model_config = dict(
+                        agent._session_init_model_config or {}
+                    )
+                    if _local_auto_rotation:
+                        _child_model_config["_local_rotation_handoff"] = {
+                            "reason": "max_lineage_compressions",
+                            "completed_compressions": _next_lineage_count,
+                            "preserves": [
+                                "structured_compaction_summary",
+                                "protected_tail",
+                                "title",
+                                "cwd",
+                                "profile",
+                                "goal",
+                                "decisions",
+                                "open_loops",
+                            ],
+                        }
                     agent._session_db.publish_compression_child(
                         parent_session_id=old_session_id,
                         child_session_id=new_session_id,
                         source=agent.platform
                         or os.environ.get("HERMES_SESSION_SOURCE", "cli"),
                         model=agent.model,
-                        model_config=agent._session_init_model_config,
+                        model_config=_child_model_config,
                         system_prompt=new_system_prompt,
                         messages=compressed,
                         cwd=getattr(agent, "working_directory", None),
                         profile_name=_profile_for_child,
                         compression_lock_holder=_lock_holder,
                         require_compression_lease=_lock_holder is not None,
+                        local_rotation=_local_auto_rotation,
+                        lineage_compression_count=_next_lineage_count,
                     )
                     agent.session_id = new_session_id
                     try:
@@ -2177,13 +2231,14 @@ def compress_context(
                     # Compression mints a fresh child id; load_goal does a flat
                     # per-session lookup with no parent walk, so without this an
                     # active goal silently dies at the boundary (#33618).
-                    try:
-                        from hermes_cli.goals import migrate_goal_to_session
-                        migrate_goal_to_session(old_session_id, agent.session_id, reason="compression")
-                    except Exception as _goal_err:
-                        logger.debug("Could not migrate goal on compression: %s", _goal_err)
+                    if not _local_auto_rotation:
+                        try:
+                            from hermes_cli.goals import migrate_goal_to_session
+                            migrate_goal_to_session(old_session_id, agent.session_id, reason="compression")
+                        except Exception as _goal_err:
+                            logger.debug("Could not migrate goal on compression: %s", _goal_err)
                     # Auto-number the title for the continuation session
-                    if old_title:
+                    if old_title and not _local_auto_rotation:
                         try:
                             new_title = agent._session_db.get_next_title_in_lineage(old_title)
                             agent._session_db.set_session_title(agent.session_id, new_title)
@@ -2314,6 +2369,18 @@ def compress_context(
                 })
             except Exception as e:
                 logger.debug("event_callback error on session:compress: %s", e)
+            if _local_auto_rotation and _session_commit_succeeded:
+                try:
+                    agent.event_callback("session:rotate", {
+                        "platform": agent.platform or "",
+                        "session_id": agent.session_id,
+                        "old_session_id": _old_sid or "",
+                        "reason": "max_lineage_compressions",
+                        "compression_count": _next_lineage_count,
+                        "handoff": "structured_compaction_summary",
+                    })
+                except Exception as e:
+                    logger.debug("event_callback error on session:rotate: %s", e)
 
         # Surface the compaction mode to the caller (run_conversation / gateway)
         # via a rotation-independent flag. The gateway uses this — NOT an
@@ -2321,6 +2388,11 @@ def compress_context(
         # rewrite on the same id) when compaction happened in place. See #38763.
         agent._last_compression_attempt_in_place = compacted_in_place
         agent._last_compaction_in_place = compacted_in_place
+        if _local_auto_rotation and _session_commit_succeeded:
+            # The child is a fresh local continuation. The durable counter was
+            # reset atomically in publish_compression_child; mirror that state
+            # in memory so the next boundary starts a new rotation interval.
+            agent.context_compressor.compression_count = 0
 
         # Keep the post-compression rough estimate for diagnostics, but do not
         # treat it as provider-reported prompt usage. Schema-heavy rough estimates

@@ -311,6 +311,7 @@ def _(rid, params: dict) -> dict:
         cols = int(params.get("cols", 80))
     except (TypeError, ValueError):
         cols = 80
+    history_limit = params.get("history_limit")
     # ``profile`` (app-global remote mode): resume a session that lives in another
     # local profile's state.db. None/own profile → the launch profile (unchanged).
     profile = (params.get("profile") or "").strip() or None
@@ -377,6 +378,7 @@ def _(rid, params: dict) -> dict:
             sid,
             session,
             cols=cols,
+            history_limit=history_limit,
             touch=True,
             transport=current_transport() or _stdio_transport,
         )
@@ -449,21 +451,25 @@ def _(rid, params: dict) -> dict:
         except Exception:
             logger.debug("child-watch display projection read failed", exc_info=True)
             display_history = history
-        messages = _history_to_messages(display_history)
+        display_window, history_window = _bounded_history_window(display_history, history_limit)
+        messages = _history_to_messages(display_window)
+        payload = {
+            "session_id": sid,
+            "resumed": target,
+            "message_count": len(display_history),
+            "messages": messages,
+            "info": _lazy_resume_info(cwd, profile=profile),
+            "inflight": None,
+            "running": child_running,
+            "session_key": target,
+            "started_at": record["created_at"],
+            "status": "streaming" if child_running else "idle",
+        }
+        if history_window is not None:
+            payload["history_window"] = history_window
         return _ok(
             rid,
-            {
-                "session_id": sid,
-                "resumed": target,
-                "message_count": len(messages),
-                "messages": messages,
-                "info": _lazy_resume_info(cwd, profile=profile),
-                "inflight": None,
-                "running": child_running,
-                "session_key": target,
-                "started_at": record["created_at"],
-                "status": "streaming" if child_running else "idle",
-            },
+            payload,
         )
 
     # Cold resume default: register the live session and read its stored
@@ -530,11 +536,14 @@ def _(rid, params: dict) -> dict:
         auto_continue = _maybe_schedule_auto_continue(sid, record, target)
 
         messages = _history_to_messages(display_history)
+        display_window, history_window = _bounded_history_window(
+            messages, history_limit
+        )
         payload = {
             "session_id": sid,
             "resumed": target,
             "message_count": len(messages),
-            "messages": messages,
+            "messages": display_window,
             "info": _lazy_resume_info(
                 cwd,
                 model=model_override.get("model") or "",
@@ -549,6 +558,8 @@ def _(rid, params: dict) -> dict:
         }
         if auto_continue is not None:
             payload["auto_continue"] = auto_continue
+        if history_window is not None:
+            payload["history_window"] = history_window
         return _ok(rid, payload)
 
     # Build the agent OUTSIDE the lock — _make_agent can block for seconds
@@ -629,6 +640,7 @@ def _(rid, params: dict) -> dict:
                 other_sid,
                 other_session,
                 cols=cols,
+                history_limit=history_limit,
                 touch=True,
                 transport=current_transport() or _stdio_transport,
             )
@@ -681,11 +693,12 @@ def _(rid, params: dict) -> dict:
     auto_continue = (
         _maybe_schedule_auto_continue(sid, session, target) if session else None
     )
+    display_window, history_window = _bounded_history_window(messages, history_limit)
     payload = {
         "session_id": sid,
         "resumed": target,
         "message_count": len(messages),
-        "messages": messages,
+        "messages": display_window,
         "info": _session_info(agent, session),
         "inflight": None,
         "running": False,
@@ -695,6 +708,8 @@ def _(rid, params: dict) -> dict:
     }
     if auto_continue is not None:
         payload["auto_continue"] = auto_continue
+    if history_window is not None:
+        payload["history_window"] = history_window
     return _ok(rid, payload)
 
 
@@ -779,6 +794,7 @@ def _(rid, params: dict) -> dict:
         _live_session_payload(
             sid,
             session,
+            history_limit=params.get("history_limit"),
             touch=True,
             transport=current_transport() or _stdio_transport,
         ),
