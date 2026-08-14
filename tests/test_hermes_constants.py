@@ -248,6 +248,71 @@ class TestIsContainer:
         monkeypatch.setattr(os.path, "exists", lambda p: False)
         assert is_container() is True
 
+    def _fake_open(self, cgroup_text, mountinfo_text):
+        """Return an open() stand-in serving synthetic /proc content by path."""
+        import builtins
+        import io
+
+        real_open = builtins.open
+
+        def _opener(path, *args, **kwargs):
+            if path == "/proc/1/cgroup":
+                return io.StringIO(cgroup_text)
+            if path == "/proc/self/mountinfo":
+                return io.StringIO(mountinfo_text)
+            return real_open(path, *args, **kwargs)
+
+        return _opener
+
+    def test_docker_host_with_other_containers_not_falsely_detected(self, monkeypatch):
+        """Root-cause regression: a host that merely *runs* Docker/containerd for
+        other workloads must not be misdetected as itself running inside a
+        container.
+
+        /proc/self/mountinfo is namespace-wide -- a host process sees every
+        mount visible in its namespace, including the overlay snapshot mounts
+        backing *other* containers running on that host. A blind substring
+        search for "containerd" anywhere in the file false-positives on any
+        Docker host with at least one container running, even though the
+        querying process's own root ("/") is a plain host filesystem. Found
+        live: mislabeled a systemd-supervised gateway as "docker (foreground)"
+        on a host that also runs unrelated Docker containers.
+        """
+        self._reset_cache(monkeypatch)
+        monkeypatch.setattr(os.path, "exists", lambda p: False)
+        monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
+        cgroup_text = "0::/init.scope\n"
+        mountinfo_text = (
+            "31 1 252:0 / / rw,noatime shared:1 - ext4 /dev/mapper/vg-lv rw\n"
+            "67 31 0:40 / /var/lib/docker/rootfs/overlayfs/abc123 rw,relatime "
+            "shared:61 - overlay overlay rw,lowerdir=/var/lib/containerd/"
+            "io.containerd.snapshotter.v1.overlayfs/snapshots/9/fs,"
+            "upperdir=/var/lib/containerd/io.containerd.snapshotter.v1."
+            "overlayfs/snapshots/10/fs,workdir=/var/lib/containerd/"
+            "io.containerd.snapshotter.v1.overlayfs/snapshots/10/work\n"
+        )
+        monkeypatch.setattr("builtins.open", self._fake_open(cgroup_text, mountinfo_text))
+        assert is_container() is False
+
+    def test_detects_genuine_container_via_own_root_mount(self, monkeypatch):
+        """A real container guest whose own "/" is the overlay rootfs is still
+        detected correctly -- the fix must not regress the true-positive case.
+        """
+        self._reset_cache(monkeypatch)
+        monkeypatch.setattr(os.path, "exists", lambda p: False)
+        monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
+        cgroup_text = "0::/\n"
+        mountinfo_text = (
+            "1 0 0:1 / / rw,relatime - overlay overlay rw,lowerdir=/var/lib/"
+            "containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/1/fs,"
+            "upperdir=/var/lib/containerd/io.containerd.snapshotter.v1."
+            "overlayfs/snapshots/2/fs,workdir=/var/lib/containerd/"
+            "io.containerd.snapshotter.v1.overlayfs/snapshots/2/work\n"
+            "2 1 0:2 / /proc rw,relatime - proc proc rw\n"
+        )
+        monkeypatch.setattr("builtins.open", self._fake_open(cgroup_text, mountinfo_text))
+        assert is_container() is True
+
 
 class TestParseReasoningEffort:
     """Tests for parse_reasoning_effort() — string → reasoning config dict."""

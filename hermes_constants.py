@@ -1145,15 +1145,39 @@ def is_container() -> bool:
                 return True
     except OSError:
         pass
-    # cgroup v2: /proc/1/cgroup is just "0::/" with no marker. The container
-    # runtime still shows up in the mount table (overlay rootfs, runtime mount
-    # paths), so scan mountinfo as a last resort.
+    # cgroup v2: /proc/1/cgroup is just "0::/" with no marker. A container
+    # guest's own root filesystem is typically an overlay backed by the
+    # runtime (kubepods/containerd/crio), so check the mount entry for our
+    # own root ("/") as a last resort.
+    #
+    # This MUST be scoped to the "/" mount specifically, not a blind
+    # substring search across the whole mountinfo table (NousResearch/
+    # hermes-agent#<TBD>). Any process on a Docker/containerd HOST — not
+    # a container guest — sees every mount in its namespace, including the
+    # overlay snapshot mounts backing *other* containers running on that
+    # host. A host with even one Docker container running will always have
+    # "containerd" appear somewhere in /proc/self/mountinfo, so the old
+    # whole-file substring check false-positived "is_container() == True"
+    # on any Docker host, mislabeling a real systemd/launchd-managed
+    # process as "docker (foreground)" (found live on a host that runs
+    # Docker for unrelated services alongside a systemd-supervised gateway).
+    # The root-mount-only check is self-referential: it only fires when the
+    # process's *own* "/" is itself the container overlay, which is the
+    # actual "am I inside a container" signal.
     try:
         with open("/proc/self/mountinfo", "r", encoding="utf-8") as f:
-            mountinfo = f.read()
-            if any(marker in mountinfo for marker in ("kubepods", "containerd", "crio")):
-                _container_detected = True
-                return True
+            for line in f:
+                fields = line.split(" - ", 1)
+                if not fields:
+                    continue
+                pre_separator = fields[0].split()
+                # mountinfo format: ... mount-id parent-id major:minor root
+                # mount-point ... — mount-point is the 5th field pre-separator.
+                if len(pre_separator) < 5 or pre_separator[4] != "/":
+                    continue
+                if any(marker in line for marker in ("kubepods", "containerd", "crio")):
+                    _container_detected = True
+                    return True
     except OSError:
         pass
     _container_detected = False
