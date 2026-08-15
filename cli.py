@@ -17809,8 +17809,39 @@ def main(
                     if isinstance(effective_query, str):
                         _stripped_q = effective_query.strip()
                         if _stripped_q == "/learn" or _stripped_q.startswith("/learn "):
-                            from agent.learn_prompt import build_learn_prompt
-                            effective_query = build_learn_prompt(_stripped_q[len("/learn"):].strip())
+                            _learn_focus = _stripped_q[len("/learn"):].strip()
+                            if _learn_focus:
+                                from agent.learn_prompt import build_learn_prompt
+                                effective_query = build_learn_prompt(_learn_focus)
+                            else:
+                                # build_learn_prompt("") defaults to "review the
+                                # workflow we just went through in this
+                                # conversation" -- correct for the interactive
+                                # REPL (rich history exists), but in a fresh
+                                # one-shot -q/-Q session there IS no prior
+                                # workflow. Sending that default here fed the
+                                # model a request with nothing real to satisfy,
+                                # and it wandered into unrelated self-
+                                # investigation (grepping its own commands.py,
+                                # reading a partial line range, then confidently
+                                # reporting "/learn isn't registered" -- a real
+                                # hallucination, reproduced live 2026-08-15,
+                                # matching what was independently reported on
+                                # KESTREL). Be honest about the empty-history
+                                # case instead of asking the model to invent a
+                                # workflow to distill.
+                                effective_query = (
+                                    "[/learn] The user ran /learn with no focus "
+                                    "and no prior conversation in this session "
+                                    "(one-shot mode starts fresh every time). "
+                                    "There is nothing yet to distill into a "
+                                    "skill. Do not investigate unrelated tooling "
+                                    "or guess a workflow. Reply with exactly: "
+                                    "tell me what to learn from (a directory, a "
+                                    "URL, pasted notes, or a description of a "
+                                    "workflow) — one-shot /learn has no prior "
+                                    "conversation to draw from. Nothing else."
+                                )
                         elif _stripped_q == "/init" or _stripped_q.startswith("/init "):
                             from hermes_cli.init_command import build_init_prompt_for_cwd
                             effective_query = build_init_prompt_for_cwd(extra=_stripped_q[len("/init"):].strip())
