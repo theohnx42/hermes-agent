@@ -216,11 +216,43 @@ def test_gateway_vbs_script_is_console_less(monkeypatch):
     assert "pythonw.exe" in content
     assert "hermes_cli.main" in content
     assert "gateway run" in content
-    assert ", 0, False" in content  # hidden window, detached/async
+    assert ", 0, True)" in content  # hidden window, BLOCKS so RestartOnFailure can see real exits
     for var in ("HERMES_HOME", "PYTHONIOENCODING", "HERMES_GATEWAY_DETACHED", "VIRTUAL_ENV", "PYTHONPATH"):
         assert var in content
     assert "--profile" in content and "work" in content
     assert content.endswith("\r\n")
+
+
+def test_gateway_vbs_script_propagates_exit_code_for_restart_on_failure(monkeypatch):
+    """Root-cause regression: the launcher must wait for the gateway and
+    propagate its real exit code, not fire-and-forget.
+
+    Found live: with bWaitOnReturn=False, wscript.exe (the process Task
+    Scheduler's Action directly launches and the only process
+    <RestartOnFailure> can observe) returned/exited milliseconds after
+    spawning the detached gateway. Task Scheduler saw the launcher
+    "succeed" instantly and had zero visibility into the gateway crashing
+    minutes or hours later -- RestartOnFailure was configured (1min
+    interval, 999 retries) but structurally could never fire. This is the
+    only crash-recovery mechanism the native Windows Scheduled Task
+    install path has; there is no separate health-checking supervisor.
+    """
+    monkeypatch.setattr(
+        gateway_windows,
+        "_resolve_detached_python",
+        lambda exe: (r"C:\venv\Scripts\python.exe", Path(r"C:\venv"), []),
+    )
+    content = gateway_windows._build_gateway_vbs_script(
+        r"C:\venv\Scripts\python.exe",
+        r"C:\Hermes",
+        r"C:\Hermes",
+        "",
+    )
+    assert ", 0, False" not in content  # the old fire-and-forget form must be gone
+    assert "exitCode = sh.Run(" in content and ", 0, True)" in content
+    assert "WScript.Quit exitCode" in content
+    # exitCode must be declared (Option Explicit rejects undeclared vars).
+    assert "Dim sh, env, existing_pp, exitCode" in content
 
 
 

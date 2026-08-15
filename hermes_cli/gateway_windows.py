@@ -472,6 +472,28 @@ def _build_gateway_vbs_script(
     flash). No cmd.exe anywhere in the chain. Mirrors
     ``_build_gateway_cmd_script`` (same env + argv via
     ``_resolve_detached_python``).
+
+    Second root-cause fix (found live, no issue number yet): ``sh.Run``'s
+    third parameter (``bWaitOnReturn``) was ``False`` — a fire-and-forget
+    spawn. ``wscript.exe`` therefore returned/exited (code 0) the instant it
+    launched the gateway, milliseconds after starting. Task Scheduler's
+    ``<RestartOnFailure>`` policy tracks the exit of the process the Action
+    directly launches — ``wscript.exe`` here — so it saw the *launcher*
+    "succeed" almost instantly and had zero visibility into the detached
+    gateway process crashing minutes or hours later. The policy was
+    completely inert: a crashed gateway would never be relaunched, on any
+    machine using the Scheduled Task install path, despite
+    ``RestartOnFailure`` being configured with a 1-minute interval and 999
+    retries. Fixed by waiting for the gateway to actually exit
+    (``bWaitOnReturn = True``) and propagating its real exit code as
+    ``wscript.exe``'s own exit code via ``WScript.Quit``. wscript.exe's
+    hidden console is unaffected either way — this only changes when the
+    *launcher* process itself exits, which is exactly what Task Scheduler
+    needs to see to make ``RestartOnFailure`` real. The separate Startup-
+    folder fallback launcher (``_build_startup_launcher``) still
+    fire-and-forgets when it chains to this script — that path has no
+    init-system-level restart policy to preserve, so blocking there would
+    only tie up an extra wscript.exe for no benefit.
     """
     python_exe_path, venv_dir, extra_pythonpath = _resolve_detached_python(python_path)
 
@@ -490,7 +512,7 @@ def _build_gateway_vbs_script(
     lines = [
         f"' {_TASK_DESCRIPTION}",
         "Option Explicit",
-        "Dim sh, env, existing_pp",
+        "Dim sh, env, existing_pp, exitCode",
         'Set sh = CreateObject("WScript.Shell")',
         'Set env = sh.Environment("PROCESS")',
         f"env.Item({_quote_vbs_string('HERMES_HOME')}) = {_quote_vbs_string(hermes_home)}",
@@ -506,10 +528,14 @@ def _build_gateway_vbs_script(
         f"  env.Item({_quote_vbs_string('PYTHONPATH')}) = {_quote_vbs_string(static_pythonpath)}",
         "End If",
         f"sh.CurrentDirectory = {_quote_vbs_string(working_dir)}",
-        # Window style 0 = hidden; bWaitOnReturn False = detached/async. The
-        # console python's one console is created hidden and inherited by all
-        # descendants, so nothing ever flashes.
-        f"sh.Run {_quote_vbs_string(command_line)}, 0, False",
+        # Window style 0 = hidden. bWaitOnReturn = True (was False): wait for
+        # the gateway to actually exit and propagate its real exit code as
+        # our own, so Task Scheduler's RestartOnFailure can see genuine
+        # crashes instead of the launcher's own instant, always-successful
+        # exit. The console python's one hidden console is still created
+        # and inherited by every descendant either way, so nothing flashes.
+        f"exitCode = sh.Run({_quote_vbs_string(command_line)}, 0, True)",
+        "WScript.Quit exitCode",
     ]
     return "\r\n".join(lines) + "\r\n"
 
