@@ -17792,6 +17792,28 @@ def main(
                 cli.tool_progress_mode = "off"
                 if cli._ensure_runtime_credentials():
                     effective_query: Any = query
+                    # `/learn` and `/init` are REPL slash commands whose handlers
+                    # (_handle_learn_command / _handle_init_command in
+                    # cli_commands_mixin.py) queue the built prompt onto
+                    # ``_pending_input`` for process_loop to pick up. One-shot
+                    # ``-q``/``-Q`` mode never starts process_loop — it calls
+                    # run_conversation() directly below — so a literal
+                    # "/learn ..." query used to go straight to the model as raw
+                    # text instead of the standards-guided learn/init prompt
+                    # (found live on KESTREL, LIVE-MESH-BUG-SWEEP 2026-08-14
+                    # §24; reproduced and confirmed missing on NIGHTWATCH's
+                    # installed copy 2026-08-15, same root cause). Mirror what
+                    # tui_gateway/methods_tools.py's command.dispatch already
+                    # does for the same two commands: build the real prompt and
+                    # submit THAT as the turn.
+                    if isinstance(effective_query, str):
+                        _stripped_q = effective_query.strip()
+                        if _stripped_q == "/learn" or _stripped_q.startswith("/learn "):
+                            from agent.learn_prompt import build_learn_prompt
+                            effective_query = build_learn_prompt(_stripped_q[len("/learn"):].strip())
+                        elif _stripped_q == "/init" or _stripped_q.startswith("/init "):
+                            from hermes_cli.init_command import build_init_prompt_for_cwd
+                            effective_query = build_init_prompt_for_cwd(extra=_stripped_q[len("/init"):].strip())
                     if single_query_images or single_query_image_urls:
                         # Honour the same image-routing decision used by the
                         # interactive path. With a vision-capable model (incl.
