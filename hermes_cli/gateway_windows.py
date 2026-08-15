@@ -602,7 +602,35 @@ def _write_task_script() -> Path:
 # ---------------------------------------------------------------------------
 
 def _resolve_task_user() -> str | None:
-    """Return ``DOMAIN\\USER`` if available, else bare USERNAME, else None."""
+    """Return ``DOMAIN\\USER`` if available, else bare USERNAME, else None.
+
+    Prefer ``whoami`` over the ``USERDOMAIN``/``USERNAME`` env vars: those
+    vars are unreliable outside a genuine interactive logon session. Under a
+    non-interactive session (observed via SSH — OpenSSH Server on a
+    workgroup, non-domain-joined machine), ``%USERDOMAIN%`` reports the
+    literal string ``WORKGROUP`` instead of the local computer name, even
+    though the account's real SID authority is ``COMPUTERNAME\\username``
+    (confirmed via ``whoami /user``). Feeding that bad ``WORKGROUP\\user``
+    string into the Scheduled Task XML's ``<UserId>`` makes ``schtasks
+    /Create`` fail outright with "No mapping between account names and
+    security IDs was done" — silently breaking gateway auto-install for any
+    profile installed over SSH rather than at the physical console.
+    ``whoami`` (no args) asks the OS to resolve the *current* token's account
+    name directly, which is correct in both interactive and non-interactive
+    sessions, so it's used first and the env vars are kept only as a
+    last-resort fallback for platforms/sessions where ``whoami`` itself is
+    unavailable.
+    """
+    try:
+        result = subprocess.run(
+            ["whoami"], capture_output=True, text=True, timeout=5, check=False
+        )
+        resolved = (result.stdout or "").strip()
+        if result.returncode == 0 and resolved and "\\" in resolved:
+            return resolved
+    except (OSError, subprocess.SubprocessError):
+        pass
+
     username = os.environ.get("USERNAME") or os.environ.get("USER") or os.environ.get("LOGNAME")
     if not username:
         return None

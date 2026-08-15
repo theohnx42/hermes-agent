@@ -26,6 +26,65 @@ def test_schtasks_encoding_falls_back_to_utf8(monkeypatch):
 
 
 
+def test_resolve_task_user_prefers_whoami_over_env_vars(monkeypatch):
+    """whoami resolves the real account even when USERDOMAIN is wrong.
+
+    Reproduces the observed failure mode: an SSH-spawned session on a
+    workgroup (non-domain) Windows box reports USERDOMAIN=WORKGROUP, which
+    is not a resolvable SID authority for the local account, while whoami
+    correctly reports COMPUTERNAME\\user. Trusting the env var fed a bad
+    UserId into the Scheduled Task XML and schtasks /Create failed with
+    "No mapping between account names and security IDs was done."
+    """
+
+    class FakeCompleted:
+        returncode = 0
+        stdout = "nightfall\\austi\n"
+
+    def fake_run(args, **kwargs):
+        assert args == ["whoami"]
+        return FakeCompleted()
+
+    monkeypatch.setattr(gateway_windows.subprocess, "run", fake_run)
+    monkeypatch.setenv("USERDOMAIN", "WORKGROUP")
+    monkeypatch.setenv("USERNAME", "austi")
+
+    assert gateway_windows._resolve_task_user() == "nightfall\\austi"
+
+
+def test_resolve_task_user_falls_back_to_env_vars_when_whoami_unavailable(monkeypatch):
+    """If whoami can't run at all, fall back to the old env-var behavior
+    rather than returning None and silently dropping the UserId."""
+
+    def fake_run(args, **kwargs):
+        raise OSError("whoami not found")
+
+    monkeypatch.setattr(gateway_windows.subprocess, "run", fake_run)
+    monkeypatch.setenv("USERDOMAIN", "NIGHTFALL")
+    monkeypatch.setenv("USERNAME", "austi")
+
+    assert gateway_windows._resolve_task_user() == "NIGHTFALL\\austi"
+
+
+def test_resolve_task_user_falls_back_when_whoami_output_has_no_domain(monkeypatch):
+    """A whoami result without a backslash (unexpected shape) isn't trusted —
+    fall back to the env-var path instead of returning a bare username that
+    skips the DOMAIN\\ prefix schtasks needs."""
+
+    class FakeCompleted:
+        returncode = 0
+        stdout = "austi\n"
+
+    def fake_run(args, **kwargs):
+        return FakeCompleted()
+
+    monkeypatch.setattr(gateway_windows.subprocess, "run", fake_run)
+    monkeypatch.setenv("USERDOMAIN", "NIGHTFALL")
+    monkeypatch.setenv("USERNAME", "austi")
+
+    assert gateway_windows._resolve_task_user() == "NIGHTFALL\\austi"
+
+
 def test_build_gateway_argv_keeps_venv_console_python_for_uv_venv(monkeypatch, tmp_path):
     """No pythonw / base-interpreter detour: the venv console python.exe is
     launched hidden (CREATE_NO_WINDOW) so descendants inherit its hidden
