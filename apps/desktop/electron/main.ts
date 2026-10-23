@@ -3,10 +3,11 @@ import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
 import type { GatewayEndpoint } from './local-gateway'
 import { configurePythonGatewayTicketClient, createLocalGatewayDials, createStaleGatewayRestarter, ensureLocalGateway, gatewayOwnerProfile, localGatewayDial, nativeGatewayHttpHeaders, redialLocalGateway, runGatewayEnsure, runGatewayOwnerRestart } from './local-gateway'
 import { closeGatewayTicketBridges, createGatewayTicketResolver } from './local-gateway-python'
+import { requireExistingRuntime } from './existing-runtime'
 import { createPluginWsUrlHandler } from './plugin-ws-url'
 const localGatewayDials = createLocalGatewayDials()
 configurePythonGatewayTicketClient(createGatewayTicketResolver(
-  async () => ensureRuntime(await resolveHermesBackend([]), () => undefined), resolveHermesCwd))
+  async () => ensureRuntime(requireExistingRuntime(await resolveHermesBackend([])), () => undefined), resolveHermesCwd))
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
@@ -11490,12 +11491,8 @@ function assertPoolEntryStillOwned(poolKey: string, entry: any) {
 // Resolve the connection descriptor for a named profile that is not the
 // primary: attach to (or start) its canonical local gateway via
 // `hermes gateway ensure`, or verify and describe its remote. Mirrors the local
-// portion of startHermes() without the boot-progress UI, bootstrap, or
-// first-run handling (those belong to the primary only). `opts.forceLocal`
-// skips remote resolution entirely (the registry 'local' entry means THIS
-// machine regardless of the v1 routing table); `opts.poolKey` is the
-// backendPool key when it differs from the profile name (composite registry
-// scopes) so failure cleanup forgets the right entry.
+// portion of startHermes(), but installation belongs to explicit primary setup.
+// `forceLocal` selects this machine; `poolKey` retains the registry ownership scope.
 async function dialPoolBackend(profile, entry, opts: { forceLocal?: boolean; poolKey?: string } = {}) {
   const poolKey = opts.poolKey || profile
 
@@ -11530,7 +11527,7 @@ async function dialPoolBackend(profile, entry, opts: { forceLocal?: boolean; poo
 
   const connection = await ensureLocalGateway(async () => {
     const backend = await ensureRuntime(
-      await resolveHermesBackend(['--profile', profile, 'gateway', 'ensure', '--json']),
+      requireExistingRuntime(await resolveHermesBackend(['--profile', profile, 'gateway', 'ensure', '--json'])),
       () => assertPoolEntryStillOwned(poolKey, entry)
     )
 
@@ -11579,7 +11576,7 @@ const GATEWAY_RESTART_CLIENT_TIMEOUT_MS = 120_000
 // what answers.
 async function restartLocalGatewayOwner(ownerProfile: string): Promise<void> {
   const result = await runGatewayOwnerRestart(async args => {
-    const backend = await ensureRuntime(await resolveHermesBackend(args), () => undefined)
+    const backend = await ensureRuntime(requireExistingRuntime(await resolveHermesBackend(args)), () => undefined)
 
     return runGatewayEnsure(
       { ...backend, env: desktopBackendSpawnEnv(backend.env || {}) },
