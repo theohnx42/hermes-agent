@@ -156,6 +156,9 @@ beforeEach(() => {
   vi.clearAllMocks()
   window.localStorage.removeItem(PLUGIN_DECISIONS_KEY)
   hostMock.onEvent = vi.fn(() => vi.fn())
+  delete hostMock.state
+  delete hostMock.activeConnectionId
+  delete hostMock.request
   hostMock.profileRoutes = vi.fn(async () => [route('a'), route('b')])
   hostMock.requestProfile = vi.fn(async () => ({}))
   hostMock.retainProfileSocket = vi.fn(() => vi.fn())
@@ -360,6 +363,63 @@ describe('the 30s drain does not open a gateway socket with nothing to deliver (
 
     expect(calls.filter(call => call.method === 'bot_relay.outbox.drain')).toHaveLength(0)
 
+    stopBotRelay()
+  })
+})
+
+describe('single local source cleanup', () => {
+  function localOnly() {
+    let profile = 'condor'
+    let gateway = 'open'
+    hostMock.state = { profile: { get: () => profile }, gateway: { get: () => gateway } }
+    hostMock.activeConnectionId = vi.fn(() => 'local')
+    hostMock.request = vi.fn(async () => ({}))
+    hostMock.profileRoutes = vi.fn(async () => [
+      route('local', { mode: 'local', primary: true, profile: 'condor' }),
+      route('local', { mode: 'local', primary: true, profile: 'disabled' })
+    ])
+
+    return { profile: (next: string) => { profile = next }, gateway: (next: string) => { gateway = next } }
+  }
+
+  it('clears through the open owner without dialing inactive local profiles, including later ticks', async () => {
+    localOnly()
+    const { startBotRelay, stopBotRelay } = await loadRelay()
+    startBotRelay()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(hostMock.request).toHaveBeenCalledExactlyOnceWith('bot_relay.roster.sync', { agents: [] })
+    expect(hostMock.requestProfile).not.toHaveBeenCalled()
+    expect(hostMock.retainProfileSocket).not.toHaveBeenCalled()
+    stopBotRelay()
+  })
+
+  it('retries an unsuccessful active clear and clears a newly activated profile once', async () => {
+    const active = localOnly()
+
+    ;(hostMock.request as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('busy'))
+    const { startBotRelay, stopBotRelay } = await loadRelay()
+    startBotRelay()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(hostMock.request).toHaveBeenCalledTimes(2)
+    active.profile('disabled') // Actual activation has already opened this owner.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(hostMock.request).toHaveBeenCalledTimes(3)
+    expect(hostMock.requestProfile).not.toHaveBeenCalled()
+    stopBotRelay()
+  })
+
+  it('waits for an open gateway and does not touch a different active source', async () => {
+    const active = localOnly()
+    active.gateway('closed')
+    const { startBotRelay, stopBotRelay } = await loadRelay()
+    startBotRelay()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(hostMock.request).not.toHaveBeenCalled()
+    active.gateway('open')
+    hostMock.activeConnectionId = vi.fn(() => 'other')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(hostMock.request).not.toHaveBeenCalled()
+    expect(hostMock.requestProfile).not.toHaveBeenCalled()
     stopBotRelay()
   })
 })
@@ -1174,7 +1234,10 @@ describe('the roster loop forgets a machine that left', () => {
     expect(calls.filter(call => call.method === 'bot_relay.roster.sync')).toEqual([])
 
     // A returning peer starts the union pushes again.
-    hostMock.profileRoutes = vi.fn(async () => [route('a'), route('b')])
+    delete hostMock.state
+  delete hostMock.activeConnectionId
+  delete hostMock.request
+  hostMock.profileRoutes = vi.fn(async () => [route('a'), route('b')])
     await vi.advanceTimersByTimeAsync(60_000)
     expect(calls.filter(call => call.method === 'bot_relay.roster.sync').map(call => call.connectionId)).toEqual([
       'a',
