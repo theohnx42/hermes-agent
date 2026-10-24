@@ -3,13 +3,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { $activeGatewayRoute } from '@/store/gateway'
 import { $localModelsEnabled } from '@/store/local-models-flag'
-import { $connection } from '@/store/session'
+import { $connection, $gatewayState } from '@/store/session'
 import { $statusbarHiddenIds, STATUSBAR_HIDDEN_BY_DEFAULT } from '@/store/statusbar-prefs'
 
 // The poll fires getLocalHardware() every 5s while the item is shown; the
 // backend spawns nvidia-smi per poll, so a hidden window must stop polling
 // entirely and resume on visibilitychange (#120262).
-const { getLocalHardware } = vi.hoisted(() => ({
+const { getLocalHardware, currentConnectionId } = vi.hoisted(() => ({
+  currentConnectionId: vi.fn((): null | string => 'local'),
   getLocalHardware: vi.fn().mockResolvedValue({
     gpu_name: 'NVIDIA Test GPU',
     gpu_util_percent: 10,
@@ -26,12 +27,12 @@ vi.mock('@/hermes', () => ({ getLocalHardware }))
 vi.mock('@/store/session', async () => {
   const { atom } = await import('nanostores')
 
-  return { $connection: atom({ baseUrl: 'http://owner', connectionId: 'local', profile: 'condor' }) }
+  return { $connection: atom({ baseUrl: 'http://owner', connectionId: 'local', profile: 'condor' }), $gatewayState: atom('open') }
 })
 vi.mock('@/store/gateway', async () => {
   const { atom } = await import('nanostores')
 
-  return { $activeGatewayRoute: atom('condor') }
+  return { $activeGatewayRoute: atom('condor'), activeGatewayConnectionId: currentConnectionId }
 })
 
 import { useSystemResourcesStatusbarItem } from './system-resources-statusbar'
@@ -42,6 +43,9 @@ describe('system-resources statusbar polling', () => {
     vi.restoreAllMocks()
     $statusbarHiddenIds.set([...STATUSBAR_HIDDEN_BY_DEFAULT])
     $localModelsEnabled.set(true)
+    $gatewayState.set('open')
+    $activeGatewayRoute.set('condor')
+    currentConnectionId.mockReturnValue('local')
   })
 
   async function renderShown() {
@@ -73,6 +77,28 @@ describe('system-resources statusbar polling', () => {
     $connection.set(previous)
   })
 
+  it('ignores a saved descriptor alias in favor of the actual active route', async () => {
+    const previous = $connection.get()
+    $connection.set({ ...previous, connectionId: 'saved-alias', profile: 'saved-profile-alias' } as typeof previous)
+    currentConnectionId.mockReturnValue('actual-source')
+    const { unmount } = await renderShown()
+    expect(getLocalHardware).toHaveBeenCalledWith({ connectionId: 'actual-source', profile: 'condor' })
+    unmount()
+    $connection.set(previous)
+  })
+
+  it('does not request a backend while disconnected and resumes on gateway open', async () => {
+    $localModelsEnabled.set(true)
+    $statusbarHiddenIds.set([])
+    $gatewayState.set('closed')
+    const { unmount } = renderHook(() => useSystemResourcesStatusbarItem())
+    await act(async () => {})
+    expect(getLocalHardware).not.toHaveBeenCalled()
+    await act(async () => { $gatewayState.set('open') })
+    await waitFor(() => expect(getLocalHardware).toHaveBeenCalledTimes(1))
+    unmount()
+  })
+
   it('does not publish the old host response after the connection changes', async () => {
     const previous = $connection.get()
     let finishOld!: (value: Awaited<ReturnType<typeof getLocalHardware>>) => void
@@ -83,6 +109,8 @@ describe('system-resources statusbar polling', () => {
     await waitFor(() => expect(getLocalHardware).toHaveBeenCalledTimes(1))
 
     await act(async () => {
+      currentConnectionId.mockReturnValue('other-host')
+      $activeGatewayRoute.set('reviewer')
       $connection.set({ ...previous, connectionId: 'other-host', profile: 'reviewer' } as typeof previous)
     })
     await waitFor(() => expect(getLocalHardware).toHaveBeenLastCalledWith({ connectionId: 'other-host', profile: 'reviewer' }))
