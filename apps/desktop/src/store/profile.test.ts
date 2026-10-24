@@ -160,6 +160,19 @@ describe('profile-scoped cache invalidation', () => {
 })
 
 describe('prewarmProfileBackend (hover-intent pool spawn)', () => {
+  beforeEach(() => $connection.set(remoteConn()))
+
+  it('defers legacy local and explicit This device hovers until selection', () => {
+    $connection.set(localConn())
+    $connectionsRegistry.set({ version: 2, primary: 'local', secureTokenStorage: true,
+      connections: [{ id: 'local', kind: 'local', label: 'This device' }] })
+
+    prewarmProfileBackend('redteamreadonlyenum')
+    prewarmProfileBackend('extensioncanary', 'local')
+
+    expect(openGatewayForProfile).not.toHaveBeenCalled()
+    expect(openGatewayForAgent).not.toHaveBeenCalled()
+  })
   it('opens the gateway (spawn + connect, no activation) for a non-active profile', () => {
     prewarmProfileBackend('warm-basic')
 

@@ -1,7 +1,9 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { $activeGatewayRoute } from '@/store/gateway'
 import { $localModelsEnabled } from '@/store/local-models-flag'
+import { $connection } from '@/store/session'
 import { $statusbarHiddenIds, STATUSBAR_HIDDEN_BY_DEFAULT } from '@/store/statusbar-prefs'
 
 // The poll fires getLocalHardware() every 5s while the item is shown; the
@@ -21,6 +23,16 @@ const { getLocalHardware } = vi.hoisted(() => ({
 }))
 
 vi.mock('@/hermes', () => ({ getLocalHardware }))
+vi.mock('@/store/session', async () => {
+  const { atom } = await import('nanostores')
+
+  return { $connection: atom({ baseUrl: 'http://owner', connectionId: 'local', profile: 'condor' }) }
+})
+vi.mock('@/store/gateway', async () => {
+  const { atom } = await import('nanostores')
+
+  return { $activeGatewayRoute: atom('condor') }
+})
 
 import { useSystemResourcesStatusbarItem } from './system-resources-statusbar'
 
@@ -44,6 +56,46 @@ describe('system-resources statusbar polling', () => {
 
     return { unmount }
   }
+
+  it('pins hardware to the connected descriptor instead of ambient profile scope', async () => {
+    const { unmount } = await renderShown()
+    expect(getLocalHardware).toHaveBeenCalledWith({ connectionId: 'local', profile: 'condor' })
+    unmount()
+  })
+
+  it('uses the actual gateway profile when the primary descriptor omits it', async () => {
+    const previous = $connection.get()
+    $connection.set({ ...previous, profile: undefined } as typeof previous)
+    $activeGatewayRoute.set('condor')
+    const { unmount } = await renderShown()
+    expect(getLocalHardware).toHaveBeenCalledWith({ connectionId: 'local', profile: 'condor' })
+    unmount()
+    $connection.set(previous)
+  })
+
+  it('does not publish the old host response after the connection changes', async () => {
+    const previous = $connection.get()
+    let finishOld!: (value: Awaited<ReturnType<typeof getLocalHardware>>) => void
+    getLocalHardware.mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve }))
+    $localModelsEnabled.set(true)
+    $statusbarHiddenIds.set([])
+    const { result, unmount } = renderHook(() => useSystemResourcesStatusbarItem())
+    await waitFor(() => expect(getLocalHardware).toHaveBeenCalledTimes(1))
+
+    await act(async () => {
+      $connection.set({ ...previous, connectionId: 'other-host', profile: 'reviewer' } as typeof previous)
+    })
+    await waitFor(() => expect(getLocalHardware).toHaveBeenLastCalledWith({ connectionId: 'other-host', profile: 'reviewer' }))
+    await waitFor(() => expect(result.current.label).toContain('GPU 10%'))
+    await act(async () => finishOld({
+      gpu_name: 'Old host', gpu_util_percent: 99,
+      vram_total_bytes: 8 << 30, vram_used_bytes: 1 << 30, vram_usable_bytes: 6 << 30,
+      ram_total_bytes: 32 << 30, ram_available_bytes: 16 << 30, uma: false
+    }))
+    expect(result.current.label).toContain('GPU 10%')
+    unmount()
+    $connection.set(previous)
+  })
 
   it('does not poll while the document is hidden', async () => {
     vi.spyOn(document, 'hidden', 'get').mockReturnValue(true)
