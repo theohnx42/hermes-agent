@@ -613,9 +613,8 @@ def _format_elements(elements: list[UIElement], max_lines: int = 40) -> list[str
 
 def _bounds_hints(elements: list[UIElement], image_width: int, image_height: int) -> tuple[Optional[float], Optional[str]]:
     """(scale, note) when element bounds live in a different coordinate space than the screenshot, else (None, None).
-    On HiDPI displays AX bounds are native while the screenshot is downscaled, so coordinate= clicks read off the
-    screenshot miss by the scale factor. 5% slack: window chrome can hang a few px past the captured frame without
-    implying a different space. Scale heuristic: larger axis ratio wins."""
+    Native AX bounds include the window's desktop offset. Their extents cannot establish a screenshot scale or
+    an input transform. 5% slack avoids warning for small differences from window chrome."""
     if not elements or image_width <= 0 or image_height <= 0:
         return None, None
     max_x = max_y = 0
@@ -628,9 +627,10 @@ def _bounds_hints(elements: list[UIElement], image_width: int, image_height: int
     if max_x <= image_width * 1.05 and max_y <= image_height * 1.05:
         return None, None
     note = (f"element bounds are in native desktop coordinates (extend to ~{max_x}x{max_y}), "
-            f"NOT screenshot pixels ({image_width}x{image_height}). coordinate= clicks expect the native "
-            "space — derive click points from element bounds, or scale screenshot positions up accordingly")
-    return round(max(max_x / image_width, max_y / image_height), 2), note
+            f"not window-local screenshot pixels ({image_width}x{image_height}). For cua-driver coordinate= "
+            "clicks, use window-local screenshot pixels; do not pass native desktop bounds. Prefer fresh "
+            "element indices and their matching snapshot instead of inferring a transform from these extents")
+    return None, note
 
 _bounds_scale = lambda elements, image_width, image_height: _bounds_hints(elements, image_width, image_height)[0]
 _bounds_space_note = lambda elements, image_width, image_height: _bounds_hints(elements, image_width, image_height)[1]
