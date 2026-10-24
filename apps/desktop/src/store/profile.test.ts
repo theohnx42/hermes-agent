@@ -165,7 +165,7 @@ describe('prewarmProfileBackend (hover-intent pool spawn)', () => {
   it('defers legacy local and explicit This device hovers until selection', () => {
     $connection.set(localConn())
     $connectionsRegistry.set({ version: 2, primary: 'local', secureTokenStorage: true,
-      connections: [{ id: 'local', kind: 'local', label: 'This device' }] })
+      connections: [{ id: 'local', kind: 'local', label: 'This device', tokenSet: false, tokenPreview: '' }] })
 
     prewarmProfileBackend('redteamreadonlyenum')
     prewarmProfileBackend('extensioncanary', 'local')
