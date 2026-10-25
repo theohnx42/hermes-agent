@@ -467,6 +467,29 @@ def _configure_quiet_agent(agent) -> None:
     agent.tool_progress_mode = "off"
 
 
+def _expand_single_query_command(query, *, has_history: bool = False):
+    """Apply prompt-producing slash commands when no interactive loop will dispatch them."""
+    if not isinstance(query, str):
+        return query
+    stripped = query.strip()
+    command, _, focus = stripped.partition(" ")
+    if command == "/learn":
+        focus = focus.strip()
+        if not focus and not has_history:
+            return (
+                "The user ran /learn without a focus in a fresh one-shot session. "
+                "There is no prior workflow to distill. Do not investigate unrelated tools "
+                "or invent a workflow. Ask the user what directory, URL, notes, or workflow "
+                "to learn from."
+            )
+        from agent.learn_prompt import build_learn_prompt
+        return build_learn_prompt(focus)
+    if command == "/init":
+        from hermes_cli.init_command import build_init_prompt_for_cwd
+        return build_init_prompt_for_cwd(extra=focus.strip(), session_key="")
+    return query
+
+
 def _run_single_query_mode(cli, query, image, quiet, oneshot, stream_json: bool = False):
     """``-q``/``--image`` entry: seed an interactive session on a TTY, else run the one-shot turn and exit.
     ``stream_json`` (implies quiet) swaps the plain-text final answer for the JSONL event protocol."""
@@ -479,6 +502,9 @@ def _run_single_query_mode(cli, query, image, quiet, oneshot, stream_json: bool 
         )
         cli._seeded_first_message = _SeededQueryMessage(seeded_query, seeded_images)
         return cli.run()
+    query = _expand_single_query_command(
+        query, has_history=bool(getattr(cli, "conversation_history", None))
+    )
     cli._single_query_mode = True  # agent waits the full MCP cold-start before its only tool snapshot
     # No PluginManager._cli_ref (#67597): the turn's plugin tools run in the gateway, and this process
     # loads no plugins (PLG-7).

@@ -428,7 +428,7 @@ def _build_gateway_vbs_script(python_path: str, working_dir: str, hermes_home: s
     lines = [
         f"' {_TASK_DESCRIPTION}",
         "Option Explicit",
-        "Dim sh, env, existing_pp",
+        "Dim sh, env, existing_pp, exitCode",
         'Set sh = CreateObject("WScript.Shell")',
         'Set env = sh.Environment("PROCESS")',
         f"env.Item({q('HERMES_HOME')}) = {q(hermes_home)}",
@@ -442,8 +442,10 @@ def _build_gateway_vbs_script(python_path: str, working_dir: str, hermes_home: s
         f"  env.Item({q('PYTHONPATH')}) = {q(static_pythonpath)}",
         "End If",
         f"sh.CurrentDirectory = {q(working_dir)}",
-        # Window style 0 = hidden; bWaitOnReturn False = detached/async.
-        f"sh.Run {q(command_line)}, 0, False",
+        # Keep the console hidden, but remain the Scheduled Task action until
+        # the gateway exits so RestartOnFailure observes its actual exit code.
+        f"exitCode = sh.Run({q(command_line)}, 0, True)",
+        "WScript.Quit exitCode",
     ]
     return "\r\n".join(lines) + "\r\n"
 
@@ -501,6 +503,17 @@ def _atomic_write(path: Path, content: str, tmp: Path) -> None:
 
 def _resolve_task_user() -> str | None:
     """Return ``DOMAIN\\USER`` if available, else bare USERNAME, else None."""
+    # SSH workgroup sessions can report USERDOMAIN=WORKGROUP rather than the
+    # account's SID authority. Ask Windows for the current token's identity.
+    try:
+        result = subprocess.run(
+            ["whoami"], capture_output=True, text=True, timeout=5, check=False
+        )
+        resolved = (result.stdout or "").strip()
+        if result.returncode == 0 and resolved and "\\" in resolved and "\n" not in resolved and "\r" not in resolved:
+            return resolved
+    except (OSError, subprocess.SubprocessError):
+        pass
     username = os.environ.get("USERNAME") or os.environ.get("USER") or os.environ.get("LOGNAME")
     if not username:
         return None
