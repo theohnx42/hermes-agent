@@ -42,3 +42,11 @@ Command used from isolated review worktree:
 Future activation requires current source carry gate, owner-idle checks, private backup/CAS and node-qualified canary; source tests do not authorize a gateway restart or task reinstall.
 
 Additional entry-path regression executes the actual noninteractive orchestrator with fake provider-free admission exit, proving both quiet and forced-one-shot branches expand commands before dispatch; it does not claim a live provider canary.
+
+## Current consolidation in this review lane
+
+PR2 readback remains OPEN head5371273c83/basebf0203a794 stable. Fork main remains2e5e9f0c93; NousResearch main observed8084684936 is source context, not an upgrade target. Preserved unpublished78c5359034 and f38b63065a. Accepted diagnostic98e97a3e4a is carried as714d853d4d. CURRENT reviewed run54 patch0505a01cbda275068972b49f13d8d68a69d3c2fdf73dc924e620cad961390220 is carried asf036250124. Rejected run53 patch945bbc is historical evidence only. Production workspace implementation matches the reviewed patch; fixture harness now imports this maintained tree instead of hardcoding the live source overlay. Separate PR2 owner-recovery changes remain preserved.
+
+Read-only NIGHTFALL source check: native root HEADbf0203, neither exact latest-attempt-tail diagnostic nor preclaim classifier/helper present; both source paths clean. No duplication found in checked published refs/native root; this does not inventory another private branch. No board/task mutation or dispatch.
+
+Combined Windows/one-shot/diagnostic/preclaim tests:52 passed,6 Windows-only skips (4.10s). Additional diagnostic/managed-exit/claim-allowlist/unknown-assignee/preclaim tests:35 passed (3.52s). Suites overlap and must not be summed. Ruff on both Kanban modules/new fixtures and diff-check PASS. Source remains unpublished pending owner review. No fork-main merge, updater change, gateway restart, task installation, UI/provider call, deployment or HP1 action. HP1 HOLD remains. Windows execution canaries, optional rotation and cross-profile physical-screen ownership parity remain qualified gates.
