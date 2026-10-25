@@ -130,6 +130,8 @@ class DispatchResult:
     """Task ids reclaimed because their worker PID disappeared."""
     auto_blocked: list[str] = field(default_factory=list)
     """Task ids auto-blocked by the spawn-failure circuit breaker."""
+    dispatch_rejected: list[str] = field(default_factory=list)
+    """Task ids rejected before claim or worker spawn by dispatch admission."""
     timed_out: list[str] = field(default_factory=list)
     """Task ids whose workers exceeded ``max_runtime_seconds``."""
     stale: list[str] = field(default_factory=list)
@@ -2060,6 +2062,31 @@ def _call_spawn_fn(spawn_fn, task: Task, workspace: str, board: Optional[str]) -
         return spawn_fn(task, workspace)
 
 
+def _reject_preclaim_workspace_mismatch(
+    conn: sqlite3.Connection, task_id: str, *, reason: str, lane: str,
+    workspace_kind: Optional[str], workspace_path: Optional[str],
+) -> bool:
+    """CAS-reject an incompatible workspace without opening a task run."""
+    source_status = "review" if lane == "review" else "ready"
+    with _kb.write_txn(conn):
+        updated = conn.execute(
+            "UPDATE tasks SET status = 'blocked', block_kind = 'capability', "
+            "block_recurrences = 1 WHERE id = ? AND status = ? AND claim_lock IS NULL",
+            (task_id, source_status),
+        ).rowcount
+        if updated != 1:
+            return False
+        _kb._append_event(conn, task_id, "dispatch_rejected", {
+            "reason": reason,
+            "host_platform": sys.platform,
+            "workspace_kind": workspace_kind,
+            "workspace_path": workspace_path,
+            "source_status": source_status,
+            "run_id": None,
+        })
+    return True
+
+
 def _dispatch_lane_task(
     conn: sqlite3.Connection,
     row: sqlite3.Row,
@@ -2121,6 +2148,18 @@ def _dispatch_lane_task(
         if not dry_run:
             with _kb.write_txn(conn):
                 _kb._append_event(conn, task_id, "respawn_guarded", {"reason": guard_reason})
+        return False
+
+    candidate = _kb.get_task(conn, task_id)
+    if candidate is None:
+        return False
+    workspace_error = _kbw.workspace_platform_compatibility_error(candidate)
+    if workspace_error is not None:
+        if dry_run or _reject_preclaim_workspace_mismatch(
+            conn, task_id, reason=workspace_error, lane=lane,
+            workspace_kind=candidate.workspace_kind, workspace_path=candidate.workspace_path,
+        ):
+            result.dispatch_rejected.append(task_id)
         return False
 
     def _count_spawn(name: str) -> None:
