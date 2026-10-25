@@ -31,7 +31,7 @@ Validation: bounded git show/grep against exact commit objects and current test 
 
 ## Maintained source candidate and read-only NIGHTFALL qualification
 
-Candidate changes only hermes_cli/gateway_windows.py (hidden wait/exit propagation and bounded whoami fallback) and hermes_cli/cli_single_query.py (expand prompt-producing commands after the interactive-seed branch, before image routing; fresh bare learn has explicit no-history instruction, resumed history still uses authored distillation). Tests: 33 passed, 6 platform skips, 2.20s; Ruff all four source/test files PASS. No Windows task was installed or regenerated; no model/provider was invoked by tests. Six Windows-only tests remain platform-skipped on Linux.
+Candidate changes only hermes_cli/gateway_windows.py (hidden wait/exit propagation and bounded whoami fallback) and hermes_cli/cli_single_query.py (expand prompt-producing commands after the interactive-seed branch, before image routing; fresh bare learn has explicit no-history instruction, resumed history still uses authored distillation). Tests: 34 passed, 6 platform skips, 2.72s; Ruff all four source/test files PASS. No Windows task was installed or regenerated; no model/provider was invoked by tests. Six Windows-only tests remain platform-skipped on Linux.
 
 Read-only actual NIGHTFALL scheduled-task metadata: Hermes_Gateway_condor Ready, wscript.exe, RestartCount999. Existing script C:/Users/austi/AppData/Local/hermes/profiles/condor/gateway-service/Hermes_Gateway_condor.vbs has hidden style0 with WaitFalse=true, WaitTrue=false, and no WScript.Quit exitCode. Thus the maintained-source supervision gap also exists in the registered Condor launcher. This does not establish that a gateway currently crashed or lacks recovery: independent NIGHTFALL_Hermes_Gateway_Watchdog is Running. Desktop application is separate and untouched. HermesUpgrade task is Disabled; that does not prove all updater consumers across the fleet are disabled.
 
@@ -40,3 +40,5 @@ Command used from isolated review worktree:
     PYTHONPATH=/home/austin/Phoenix-repo/.codex-work/hermes-fork-carry-review-20261025 PYTHONDONTWRITEBYTECODE=1 /home/austin/.hermes/hermes-agent/.venv/bin/python -m pytest tests/hermes_cli/test_gateway_windows.py tests/hermes_cli/test_single_query_command_prompts.py -q
 
 Future activation requires current source carry gate, owner-idle checks, private backup/CAS and node-qualified canary; source tests do not authorize a gateway restart or task reinstall.
+
+Additional entry-path regression executes the actual noninteractive orchestrator with fake provider-free admission exit, proving both quiet and forced-one-shot branches expand commands before dispatch; it does not claim a live provider canary.

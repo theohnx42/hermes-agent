@@ -33,3 +33,34 @@ def test_init_uses_current_prompt_builder():
 def test_ordinary_input_and_command_prefixes_remain_literal():
     for value in ("/learning", "/initialize", "ordinary query", None, [{"type": "text"}]):
         assert _expand_single_query_command(value) is value
+
+
+def test_noninteractive_entry_expands_before_dispatch(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    import pytest
+    from hermes_cli import cli_single_query as single
+
+    class StopBeforeProvider(Exception):
+        pass
+
+    observed = []
+    def expand(query, **kwargs):
+        observed.append((query, kwargs))
+        return "expanded prompt"
+    monkeypatch.setattr(single, "_expand_single_query_command", expand)
+    names = (
+        "_SeededQueryMessage", "_collect_kanban_task_images", "_collect_query_images",
+        "_configure_quiet_agent", "_finalize_single_query", "_route_single_query_images",
+        "_run_kanban_goal_loop_chat", "_run_quiet_single_query", "_single_query_exit_code",
+    )
+    fake_cli = SimpleNamespace(**{name: lambda *args, **kwargs: None for name in names})
+    fake_cli._should_seed_interactive = lambda *args: False
+    monkeypatch.setitem(sys.modules, "cli", fake_cli)
+    monkeypatch.setattr("hermes_cli.quiet_single_query.exit_single_query", lambda rc: (_ for _ in ()).throw(StopBeforeProvider()))
+    cli = SimpleNamespace(conversation_history=[{"role": "user", "content": "prior"}],
+                          _claim_active_session=lambda *args, **kwargs: False)
+    for quiet, oneshot in ((True, False), (False, True)):
+        with pytest.raises(StopBeforeProvider):
+            single._run_single_query_mode(cli, "/learn", None, quiet, oneshot)
+    assert observed == [("/learn", {"has_history": True})] * 2
