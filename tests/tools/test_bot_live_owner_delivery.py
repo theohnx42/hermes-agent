@@ -388,3 +388,73 @@ def test_pre_dial_failure_on_a_retried_intent_stays_ambiguous(tmp_path, monkeypa
     with pytest.raises(live.PreDialError):
         bot_mode_dm._admit_live_dm(None, dm_file)
     assert intent.exists() and Path(dm_file).exists()
+
+
+def _reset_owner_fixture(home):
+    from hermes_state import SessionDB
+    from hermes_state_local import POLICY_PREFIX
+    db = SessionDB(db_path=home / 'state.db')
+    db.create_session(session_id='chat', source='cli', chat_id='chat')
+    db.set_session_title('chat', 'Bot Chat')
+    db.end_session('chat', 'session_reset')
+    db.create_session(session_id='reset-child', source='cli', chat_id='chat', parent_session_id='chat')
+    receipt = {'session_id': 'chat', 'lineage': ['chat', 'reset-child'],
+               'entry': {'session_id': 'reset-child'}}
+    db._execute_write(lambda conn: conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?)',
+                                               (POLICY_PREFIX + 'chat', json.dumps(receipt))))
+    return db, receipt
+
+
+def test_canonical_owner_follows_existing_reset_receipt_without_changing_history(tmp_path, monkeypatch):
+    import hermes_cli.gateway_runtime as runtime
+    monkeypatch.setattr(runtime, 'discover_gateway_endpoint', _ready('authority-1'))
+    db, _receipt = _reset_owner_fixture(tmp_path)
+    try:
+        assert db.get_compression_tip('chat') == 'chat'  # reproduces the old incorrect pin
+        before = db._conn.execute('SELECT id,chat_id,title,ended_at,end_reason FROM sessions ORDER BY id').fetchall()
+        owner = mailbox.find_canonical_live_owner(tmp_path)
+        assert owner['session_id'] == owner['live_session_id'] == 'reset-child'
+        assert owner['canonical'] is True and owner['lease_id'] == 'authority-1'
+        assert db._conn.execute('SELECT id,chat_id,title,ended_at,end_reason FROM sessions ORDER BY id').fetchall() == before
+    finally:
+        db.close()
+
+
+def test_canonical_owner_follows_compression_within_reset_lineage(tmp_path, monkeypatch):
+    import hermes_cli.gateway_runtime as runtime
+    from hermes_state_local import POLICY_PREFIX
+    monkeypatch.setattr(runtime, 'discover_gateway_endpoint', _ready('authority-1'))
+    db, receipt = _reset_owner_fixture(tmp_path)
+    try:
+        db.end_session('reset-child', 'compression')
+        db.create_session(session_id='compressed-child', source='cli', chat_id='chat', parent_session_id='reset-child')
+        receipt['entry']['session_id'] = 'compressed-child'
+        receipt['lineage'].append('compressed-child')
+        db._execute_write(lambda conn: conn.execute('UPDATE state_meta SET value=? WHERE key=?',
+                           (json.dumps(receipt), POLICY_PREFIX + 'chat')))
+        assert mailbox.find_canonical_live_owner(tmp_path)['session_id'] == 'compressed-child'
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize('corruption', ['not_in_lineage', 'missing_target', 'different_owner'])
+def test_canonical_owner_refuses_corrupt_reset_receipt(tmp_path, monkeypatch, corruption):
+    import hermes_cli.gateway_runtime as runtime
+    from hermes_state_local import POLICY_PREFIX
+    from hermes_state_runtime import RuntimeStoreError
+    monkeypatch.setattr(runtime, 'discover_gateway_endpoint', _ready('authority-1'))
+    db, receipt = _reset_owner_fixture(tmp_path)
+    try:
+        if corruption == 'not_in_lineage':
+            receipt['lineage'] = ['chat']
+        elif corruption == 'missing_target':
+            receipt['entry']['session_id'] = 'missing'
+            receipt['lineage'].append('missing')
+        else:
+            receipt['session_id'] = 'foreign-owner'
+        db._execute_write(lambda conn: conn.execute('UPDATE state_meta SET value=? WHERE key=?',
+                           (json.dumps(receipt), POLICY_PREFIX + 'chat')))
+        with pytest.raises(RuntimeStoreError, match='storage_unavailable'):
+            mailbox.find_canonical_live_owner(tmp_path)
+    finally:
+        db.close()
