@@ -52,3 +52,22 @@ Read-only NIGHTFALL source check: native root HEADbf0203, neither exact latest-a
 Combined Windows/one-shot/diagnostic/preclaim tests:52 passed,6 Windows-only skips (4.10s). Additional diagnostic/managed-exit/claim-allowlist/unknown-assignee/preclaim tests:35 passed (3.52s). Suites overlap and must not be summed. Ruff on both Kanban modules/new fixtures and diff-check PASS. Coordinating-owner source review independently reran the combined suite:52 passed,6 Windows-only skips. Approved publication is limited to fast-forwarding existing draft PR2; its stable base and fork main remain unchanged. No fork-main merge, updater change, gateway restart, task installation, UI/provider call, deployment or HP1 action. HP1 HOLD remains. Windows execution canaries, optional rotation and cross-profile physical-screen ownership parity remain qualified gates.
 
 Publication scope: the five preserved/accepted carry commits and this dated classification are folded into the existing PR2 head branch after checking its unchanged preimage5371273c83. The PR remains draft. No gateway/renderer/source activation, fleet update or main merge is implied. Renderer reload/retry-rate acceptance and persistent runtime adoption remain separately qualified, alongside Windows canary, HP1 HOLD, optional rotation and cross-profile CUA parity gates.
+
+## KESTREL launchd I/O policy persistence — source candidate only
+
+Review preimage and published draft PR2 were both `3d5ba93fb0c7ebdf9ed0701c45725fd3c0e25298` before this local candidate. Actual KESTREL source `d923a5eb487a17c0a68801bba9ef0f56c81040a8` and this review version both omit the August owner-accepted `ProcessType=Interactive` / `LowPriorityIO=false` policy from `hermes_cli/gateway_launchd.py::generate_launchd_plist`. Existing ops handoff `.ai-team/handoffs/HP1-KESTREL-A2A-FIX-2026-08-21.md` records the earlier deployed repair. This is a persistence gap; this change does not establish I/O throttling as the cause of today's startup stall.
+
+The candidate adds only the two typed plist keys and their explanatory comment. JXA `$.system`, nested managed launcher/timestamp wrapper, profile/environment, cwd, restart policy, limits, logs and TTY behavior remain unchanged. Existing carry, PR2 stable base and fork main are preserved. No live KESTREL source, plist, application, process or gateway was changed.
+
+`tests/hermes_cli/test_gateway_launchd_policy.py` parses the full generated XML with mocked runtime selectors. It checks typed policy plus the exact osascript → managed `stderr_timestamp` → managed `gateway run --external-supervisor` chain, named profile, environment, cwd, KeepAlive, nofile, logs and drain/respawn settings. It first failed on the unchanged preimage with `KeyError: ProcessType`; the candidate passes. This proves generator behavior, not native macOS scheduling or runtime recovery.
+
+Validation uses the required isolated runner and existing interpreter, without installing dependencies:
+
+    HERMES_PYTHON=/home/austin/.hermes/hermes-agent/.venv/bin/python HERMES_TEST_FILE_RETRIES=0 scripts/run_tests.sh tests/hermes_cli/test_gateway_launchd_policy.py tests/hermes_cli/test_gateway_service.py -k 'launchd_plist or launchd_osascript or interactive_io_policy' -q
+
+Result: **11 passed, 1 native-macOS test skipped**. The broader nine-file launchd/service run returned **136 passed, 4 failed, 33 platform skips**. Its same four failures reproduced with the exact unchanged preimage in the two affected files (**111 passed, 4 failed, 3 skips**); candidate bytes were restored exactly in `finally`. Three failures import the API room-grant path with `aiohttp.web=None`; one existing systemd fixture reaches the home-I/O guard on `/root/.hermes/tools/facts.json`. No unrelated fixture, guard or environment was weakened. Broad-suite success is not claimed.
+
+    /home/austin/.hermes/hermes-agent/.venv/bin/ruff check hermes_cli/gateway_launchd.py tests/hermes_cli/test_gateway_launchd_policy.py
+    git diff --check
+
+Both passed. Candidate source SHA256 `d48fd7f7df2b9a6b6549f5537f60b22046047e183c2ab160a069a2af83ca870d`; new regression SHA256 `cdd198142188411e51cb83c2adbaf0448b9c3f27d72e7377ecd5a370a2b71b73`. Publication and later activation require coordinator review. This slice performs no push, PR2 update, deployment or service restart.

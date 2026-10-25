@@ -408,6 +408,13 @@ def generate_launchd_plist() -> str:
         {prog_args_xml}
     </array>
     
+    <!-- Keep the previously accepted interactive scheduling and normal I/O
+         policy explicit when this plist is regenerated. -->
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>LowPriorityIO</key>
+    <false/>
+
     <key>WorkingDirectory</key>
     <string>{working_dir}</string>
     
