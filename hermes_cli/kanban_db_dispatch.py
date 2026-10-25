@@ -1025,7 +1025,17 @@ def _worker_final_output(task_id: str, board: Optional[str] = None) -> str:
         return ""
     if not raw:
         return ""
-    raw = _EXIT_TRAILER_RE.sub("", raw)
+    # Logs append across attempts. Scope to the latest attempt BEFORE trimming its
+    # CLI summary: an earlier attempt's resume hint must not erase a newer quiet
+    # owner's transport error. A killed worker may leave no final trailer.
+    trailers = list(_EXIT_TRAILER_RE.finditer(raw))
+    if trailers:
+        tail = raw[trailers[-1].end():]
+        if tail.strip():
+            raw = tail
+        else:
+            start = trailers[-2].end() if len(trailers) > 1 else 0
+            raw = raw[start:trailers[-1].start()]
     cut = raw.rfind(_exit_summary_marker())
     if cut != -1:
         raw = raw[:cut]
