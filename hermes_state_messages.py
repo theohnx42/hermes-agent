@@ -1114,7 +1114,7 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
         first_by_uid.setdefault(uid, key)
         return key
 
-    def _dedupe_display_generations(self, rows, *, drop_removed: bool = False):
+    def _dedupe_display_generations(self, rows, *, drop_removed: bool = False, preview: bool = False):
         """Collapse compaction generations so each logical message appears once (the protected tail is copied
         into each generation: same role/content/timestamp, different ``active``/id); prefer the live row, then
         the newest. The ONE definition every display projection shares. *rows* must be ordered by ``id``.
@@ -1123,6 +1123,16 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
         newer copy) and ``compacted``. A message whose newest copy is removed is not shown, so a rewind in a
         compression child never brings back the parent's copy. Copies share the display key or ``message_uid``
         (a micro-compaction merge also stands for the rows it absorbed)."""
+        def key_for(row):
+            if preview and "_preview_truncated" in row.keys() and row["_preview_truncated"]:
+                # Never merge different large bodies merely because their prefixes match.
+                # Modern copies retain their full-body display identity; legacy rows without
+                # one stay distinct rather than guessing an identity from the preview.
+                identity = row["display_identity"] or ("row", row["id"])
+                return (row["role"], ("content-preview", identity), row["timestamp"],
+                        row["tool_call_id"], row["tool_calls"], row["tool_name"])
+            return self._display_dedupe_key(row)
+
         seen: dict[tuple[Any, ...], Any] = {}
         first_id: dict[tuple[Any, ...], int] = {}
         uid_key: dict[Any, tuple[Any, ...]] = {}  # message_uid -> the display key of its first copy
@@ -1142,8 +1152,8 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
                 # A removed row is read without its body (``_removed_identity_rows``): its stored display identity.
                 gone = not row["active"] and not row["compacted"]
                 stored = row["display_identity"] if gone else None
-                key = None if stored else self._display_dedupe_key(row)
-                hashed = stored or (self._display_identity(key) if key is not None and (
+                key = None if stored else key_for(row)
+                hashed = stored or (row["display_identity"] if preview else None) or (self._display_identity(key) if key is not None and (
                     gone or row["timestamp"] in removed_ts) else None)
                 copies = [*((hashed,) if hashed else ()), *(
                     ("uid", uid) for uid in (row["message_uid"], *_uid_list(row["absorbed_message_uids"])) if uid)]
@@ -1152,7 +1162,7 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
                     continue
             if self._is_model_only_row(row):
                 continue
-            key = key or self._display_dedupe_key(row)
+            key = key or key_for(row)
             # Only the summary carrier folds by uid: other rewritten copies (a pruned tool stub) must keep
             # their archived original visible.
             key = self._fold_summary_carrier(row, key, uid_key)
@@ -1340,6 +1350,54 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
     def _active_clause(include_inactive: bool, include_compacted: bool) -> str:
         """Audit: every row; display: active plus compaction-archived (never Undo/Rewind rows); default: live."""
         return "" if include_inactive else (_DISPLAY_ACTIVE_CLAUSE if include_compacted else " AND active = 1")
+
+    def get_message_previews(self, session_id: str, *, preview_chars: int,
+                             include_compacted: bool = False, include_ancestors: bool = False,
+                             limit: Optional[int] = None, offset: int = 0, latest: bool = False):
+        """Explicit display-only read. SQL bounds giant plain-text bodies before Python
+        materializes or decodes them; authored storage and get_messages/export are unchanged.
+        Structured image parts retain their existing inline_images projection contract.
+        """
+        if type(preview_chars) is not int or not 256 <= preview_chars <= 65536:
+            raise ValueError("preview_chars must be an integer between 256 and 65536")
+        session_ids = self._resume_lineage_ids(session_id) if include_ancestors else [session_id]
+        clause = self._active_clause(False, include_compacted)
+        oversized = "typeof(content) = 'text' AND substr(content, 1, 1) != char(0) AND length(content) > ?"
+        if self._read_one(f"SELECT id FROM messages WHERE session_id IN ({_placeholders(session_ids)})"
+                          + clause + f" AND ({oversized}) LIMIT 1", [*session_ids, preview_chars]) is None:
+            return self.get_messages(session_id, include_compacted=include_compacted,
+                                     include_ancestors=include_ancestors, limit=limit, offset=offset, latest=latest)
+        with self._read_ctx() as conn:
+            columns = [column for column in self._message_column_names(conn) if column != "content"]
+            quoted = ', '.join('"' + column.replace('"', '""') + '"' for column in columns)
+            rows = conn.execute(
+                f"SELECT {quoted}, CASE WHEN {oversized} THEN substr(content, 1, ?) ELSE content END AS content, "
+                f"length(content) AS _preview_original_chars, ({oversized}) AS _preview_truncated "
+                f"FROM messages WHERE session_id IN ({_placeholders(session_ids)}) ORDER BY id ASC",
+                [preview_chars, preview_chars, preview_chars, *session_ids]).fetchall()
+        if include_compacted:
+            # Match the canonical single-segment display set; cross-lineage reads
+            # additionally use removed identities so rewind cannot resurrect an ancestor.
+            if len(session_ids) == 1:
+                rows = [row for row in rows if row['active'] or row['compacted']]
+            rows = self._dedupe_display_generations(rows, drop_removed=len(session_ids) > 1, preview=True)
+        else:
+            rows = [row for row in rows if row['active']]
+        rows = rows[::-1][offset:][:limit][::-1] if latest else rows[offset:][:limit]
+        result = []
+        for row in rows:
+            truncated = bool(row['_preview_truncated'])
+            # A truncated plain-text prefix must not be interpreted as structured content.
+            message = self._row_to_message_dict(row, warn_context="history preview", summary_flag=True)
+            original_chars = message.pop('_preview_original_chars')
+            message.pop('_preview_truncated')
+            if truncated:
+                message['content_preview'] = {'truncated': True, 'original_chars': original_chars,
+                                              'shown_chars': preview_chars, 'full_content_available': True}
+                message['content'] += (f"\n\n[History preview: showing {preview_chars:,} of {original_chars:,} "
+                                       "characters. Full stored content remains available through full history/export.]")
+            result.append(message)
+        return result
 
     def get_messages(self, session_id: str, include_inactive: bool = False, include_compacted: bool = False,
                      limit: Optional[int] = None, offset: int = 0, latest: bool = False,

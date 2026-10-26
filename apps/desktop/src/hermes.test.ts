@@ -544,7 +544,7 @@ describe('Hermes REST helpers', () => {
     await getLatestSessionMessages('session-1', 'xiaoxuxu')
 
     expect(api).toHaveBeenCalledWith({
-      path: `/api/sessions/session-1/messages?profile=xiaoxuxu&limit=${LATEST_SESSION_MESSAGES_LIMIT}&order=latest&include_compacted=true`,
+      path: `/api/sessions/session-1/messages?profile=xiaoxuxu&limit=${LATEST_SESSION_MESSAGES_LIMIT}&order=latest&include_compacted=true&preview_chars=16384`,
       profile: 'xiaoxuxu'
     })
   })
@@ -569,7 +569,7 @@ describe('Hermes REST helpers', () => {
     await getOlderSessionMessages('session-1', 'xiaoxuxu', 240)
 
     expect(api).toHaveBeenCalledWith({
-      path: `/api/sessions/session-1/messages?profile=xiaoxuxu&limit=${LATEST_SESSION_MESSAGES_LIMIT}&offset=240&order=latest&include_compacted=true`,
+      path: `/api/sessions/session-1/messages?profile=xiaoxuxu&limit=${LATEST_SESSION_MESSAGES_LIMIT}&offset=240&order=latest&include_compacted=true&preview_chars=16384`,
       profile: 'xiaoxuxu'
     })
   })
