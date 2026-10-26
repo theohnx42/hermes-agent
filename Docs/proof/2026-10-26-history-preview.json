@@ -13,7 +13,7 @@
     "native_profiles_http": 200,
     "native_messages_timeout_seconds": 8,
     "inline_images_false_timeout_seconds": 8,
-    "claim": "Huge active stored text is proven; precise timeout stage and current model replay are not proven. Engine restart timing is independently under investigation."
+    "claim": "Oversized rows are active only within the old segment, which ended session_reset. The current native local receipt points to a different physical session; old history sizes do not establish current model replay overload. Preview bounds historical display independently of receipt-authoritative target routing."
   },
   "contract": {
     "display_request": "preview_chars=16384 on latest/older Desktop history hydration",
@@ -51,5 +51,15 @@
     "gateway/platforms/api_server.py": "319320768560398b11b8db22c7eb86bd88630116f70c1218abd931052bc90267",
     "apps/desktop/src/api/sessions.ts": "950f791c595d88eeedae84aee564d5d9508bfd8dc464192af7966fdb2f4c237c"
   },
-  "activation_boundary": "Loaded Python classes/handlers require fresh normal owner processes. Renderer requires rebuilt assets and normal Desktop relaunch. Neither happened in this source validation."
+  "activation_boundary": "Loaded Python classes/handlers require fresh normal owner processes. Renderer requires rebuilt assets and normal Desktop relaunch. Neither happened in this source validation.",
+  "current_native_receipt_qualification": {
+    "logical_ui_id": "20261019_112719_6da2fc",
+    "old_segment_end_reason": "session_reset",
+    "entry_session_id": "20261026_090117_aa0fdb",
+    "parent_session_id": "20261025_193959_a76aac",
+    "current_largest_user_chars": 62108,
+    "current_largest_tool_chars": 49626,
+    "source_helper": "gateway/session_local_recovery.py:transcript_target",
+    "provenance": "Independent recall_consumer read-only native receipt qualification; no provider/session mutation."
+  }
 }
