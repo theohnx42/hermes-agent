@@ -748,7 +748,7 @@ async def get_session_messages(
         sid = _resolve_session_id(db, session_id)
         if not sid:
             return None
-        sid = db.resolve_resume_session_id(sid)
+        response_id, sid = _display_transcript_ids(db, sid)
         # Always page (an omitted limit used to load whole transcripts). Explicit
         # pagination anchors at the start; the default view is the latest page.
         default_page = limit is None
@@ -760,19 +760,20 @@ async def get_session_messages(
         # prefetch only shows the child continuation's messages after a
         # compression rotation, hiding the pre-compaction transcript
         # (#51058).
-        return sid, _limit, db.get_messages(
+        return response_id, sid, _limit, db.get_messages(
             sid, limit=_limit, offset=offset, latest=latest_page,
             include_compacted=include_compacted, include_ancestors=True)
 
     result = await asyncio.to_thread(_with_db, profile, _read, read_only=True)
     if result is None:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
-    sid, _limit, messages = result
+    response_id, sid, _limit, messages = result
     projected_messages = await asyncio.to_thread(
         _project_for_display, messages, home=_history_profile_home(profile),
         inline_images=inline_images)
     return {
-        "session_id": sid,
+        "session_id": response_id,
+        **({"transcript_session_id": sid} if response_id != sid else {}),
         # The same stamp list rows carry, so the Desktop keys a page under the
         # owner it already routes the session by.
         "profile": _serving_profile(profile),
@@ -781,6 +782,19 @@ async def get_session_messages(
             "limit": _limit, "offset": offset,
             "order": order or ("latest" if limit is None else "oldest"),
             "returned": len(projected_messages)}}
+
+
+def _display_transcript_ids(db, session_id: str) -> tuple[str, str]:
+    from hermes_state_local import local_transcript_target
+    from hermes_state_runtime import RuntimeStoreError
+    try:
+        target = local_transcript_target(db, session_id)
+    except RuntimeStoreError:
+        raise HTTPException(status_code=503, detail="Session transcript is unavailable") from None
+    if target is not None:
+        return session_id, target
+    resolved = db.resolve_resume_session_id(session_id)
+    return resolved, resolved
 
 
 def _timeline_session_id(db, session_id: str, owner: str) -> str:
@@ -792,7 +806,7 @@ def _timeline_session_id(db, session_id: str, owner: str) -> str:
 
     if not owned(session_id):
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
-    sid = db.resolve_resume_session_id(session_id)
+    _, sid = _display_transcript_ids(db, session_id)
     if not owned(sid):
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
     return sid
@@ -814,7 +828,9 @@ async def get_session_timeline(
 
     def _read(db):
         sid = _timeline_session_id(db, session_id, owner)
-        return {"session_id": sid, "profile": owner,
+        response_id, _ = _display_transcript_ids(db, session_id)
+        return {"session_id": response_id, "profile": owner,
+                **({"transcript_session_id": sid} if response_id != sid else {}),
                 **read_timeline(db, sid, limit=limit, after_row_id=after_row_id)}
 
     return await asyncio.to_thread(_with_db, profile, _read, read_only=True)
@@ -835,7 +851,9 @@ async def get_session_messages_around(
         page = read_around(db, sid, row_id, limit=limit)
         if page is None:
             raise HTTPException(status_code=404, detail="Prompt not found")
-        return {"session_id": sid, "profile": owner, **page}
+        response_id, _ = _display_transcript_ids(db, session_id)
+        return {"session_id": response_id, "profile": owner,
+                **({"transcript_session_id": sid} if response_id != sid else {}), **page}
 
     result = await asyncio.to_thread(_with_db, profile, _read, read_only=True)
     result["messages"] = await asyncio.to_thread(
