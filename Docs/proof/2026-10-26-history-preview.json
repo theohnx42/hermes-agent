@@ -1,0 +1,55 @@
+{
+  "date": "2026-10-26",
+  "base_pr2_head": "e5dd0631b836d990a4b3d4021dd507d53b433d90",
+  "scope": "Explicit display-only plain-text history previews. No source deployment, service restart, provider call or DB mutation.",
+  "observed_boundary": {
+    "node": "NIGHTFALL",
+    "canonical_session": "20261019_112719_6da2fc",
+    "active_rows": 8,
+    "compacted_rows": 0,
+    "content_chars": 108267315,
+    "largest_plain_text_chars": 54115330,
+    "direct_sql_seconds": 0.41,
+    "native_profiles_http": 200,
+    "native_messages_timeout_seconds": 8,
+    "inline_images_false_timeout_seconds": 8,
+    "claim": "Huge active stored text is proven; precise timeout stage and current model replay are not proven. Engine restart timing is independently under investigation."
+  },
+  "contract": {
+    "display_request": "preview_chars=16384 on latest/older Desktop history hydration",
+    "allowed_budget": [
+      256,
+      65536
+    ],
+    "bounded_at": "SQL CASE/substr before Python content decoding",
+    "truncation": "content_preview exposes truncated/original_chars/shown_chars/full_content_available; content includes a visible preview marker",
+    "unchanged": [
+      "authored DB",
+      "unqualified full history reads",
+      "full export",
+      "structured JSON/image content contract",
+      "model replay",
+      "provider selection",
+      "gateway lifecycle"
+    ]
+  },
+  "tests": {
+    "new_state": 12,
+    "existing_compacted_history": 47,
+    "fastapi_rest": 5,
+    "native_api_adapter": 1,
+    "native_windows_desktop_ui": 47,
+    "ruff": "PASS",
+    "diff_check": "PASS",
+    "large_fixture": "54,000,000 plain-text characters; Python preview peak asserted below4MB; full read and stored length unchanged",
+    "source_environment": "Existing runtime aiohttp reused through PYTHONPATH; no dependency installation. Full baseline suite validated in exact-source temp copy without linked .git real-home metadata.",
+    "ui_environment": "Existing NIGHTFALL node_modules; isolated source scratch only; live src/dist/release untouched"
+  },
+  "candidate_sha256": {
+    "hermes_state_messages.py": "4feefb9351835fb3210e6f04aead3410687224b3dac3380322695c40f64a4cdb",
+    "hermes_cli/web_routers/sessions.py": "75bff5db4059bc9434ffa49423a0f006795b379c7bd2856e33ed2e55267f922a",
+    "gateway/platforms/api_server.py": "319320768560398b11b8db22c7eb86bd88630116f70c1218abd931052bc90267",
+    "apps/desktop/src/api/sessions.ts": "950f791c595d88eeedae84aee564d5d9508bfd8dc464192af7966fdb2f4c237c"
+  },
+  "activation_boundary": "Loaded Python classes/handlers require fresh normal owner processes. Renderer requires rebuilt assets and normal Desktop relaunch. Neither happened in this source validation."
+}
