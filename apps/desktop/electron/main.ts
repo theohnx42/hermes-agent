@@ -1,9 +1,9 @@
 import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
 
+import { requireExistingRuntime } from './existing-runtime'
 import type { GatewayEndpoint } from './local-gateway'
 import { configurePythonGatewayTicketClient, createLocalGatewayDials, createStaleGatewayRestarter, ensureLocalGateway, gatewayOwnerProfile, localGatewayDial, nativeGatewayHttpHeaders, redialLocalGateway, runGatewayEnsure, runGatewayOwnerRestart } from './local-gateway'
 import { closeGatewayTicketBridges, createGatewayTicketResolver } from './local-gateway-python'
-import { requireExistingRuntime } from './existing-runtime'
 import { createPluginWsUrlHandler } from './plugin-ws-url'
 const localGatewayDials = createLocalGatewayDials()
 configurePythonGatewayTicketClient(createGatewayTicketResolver(
@@ -684,6 +684,7 @@ import {
   detectRemotePlatform,
   helper,
   probeWindowsRemote,
+  readRemoteProfileInventory,
   terminateOwnedWindowsDashboardForUpdate
 } from './windows-remote-lifecycle'
 import {
@@ -14905,7 +14906,7 @@ async function probeSshProfileInventory(connection) {
 
   try {
     await ssh.open()
-    const profiles = await remoteLifecycle.listRemoteHermesProfiles(ssh)
+    const { profiles, installId } = await readRemoteProfileInventory(ssh, sshConfig.remoteHermesPath || '')
 
     if (profiles.length > 0) {
       sshRosterCache.set(connection.id, profiles)
@@ -14915,7 +14916,7 @@ async function probeSshProfileInventory(connection) {
     // install id at all, so two addresses for one machine never collapse into one roster row
     // (#88828 wired this for remote/local only, through /api/status).
     connectionInstallIds.set(connection.id, {
-      id: await remoteLifecycle.readRemoteInstallId(ssh),
+      id: installId,
       ts: Date.now()
     })
   } catch (error: any) {
