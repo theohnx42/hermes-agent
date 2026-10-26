@@ -12,7 +12,7 @@ import re
 import sqlite3
 import time
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Annotated, Callable, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
@@ -740,7 +740,8 @@ def _project_for_display(messages: list, *, home=None, inline_images: bool = Tru
 async def get_session_messages(
     session_id: str, profile: Optional[str] = None, limit: Optional[int] = Query(None, ge=0),
     offset: int = Query(0, ge=0), order: Optional[str] = Query(None),
-    include_compacted: bool = Query(False), inline_images: bool = Query(True)):
+    include_compacted: bool = Query(False), inline_images: bool = Query(True),
+    preview_chars: Annotated[Optional[int], Query(ge=256, le=65536)] = None):
     if order not in (None, "oldest", "latest"):
         raise HTTPException(status_code=400, detail="order must be one of: oldest, latest")
 
@@ -760,9 +761,11 @@ async def get_session_messages(
         # prefetch only shows the child continuation's messages after a
         # compression rotation, hiding the pre-compaction transcript
         # (#51058).
-        return sid, _limit, db.get_messages(
+        reader = db.get_messages if preview_chars is None else db.get_message_previews
+        preview = {} if preview_chars is None else {'preview_chars': preview_chars}
+        return sid, _limit, reader(
             sid, limit=_limit, offset=offset, latest=latest_page,
-            include_compacted=include_compacted, include_ancestors=True)
+            include_compacted=include_compacted, include_ancestors=True, **preview)
 
     result = await asyncio.to_thread(_with_db, profile, _read, read_only=True)
     if result is None:

@@ -470,7 +470,7 @@ export function getSession(id: string, profile?: ProfileScope): Promise<SessionI
 export function getSessionMessages(
   id: string,
   profile?: ProfileScope,
-  page: { limit?: number; offset?: number; order?: 'latest' | 'oldest'; includeCompacted?: boolean } = {},
+  page: { limit?: number; offset?: number; order?: 'latest' | 'oldest'; includeCompacted?: boolean; previewChars?: number } = {},
   options: { passive?: boolean } = {}
 ): Promise<SessionMessagesResponse> {
   const query = new URLSearchParams()
@@ -498,6 +498,10 @@ export function getSessionMessages(
     query.set('include_compacted', String(page.includeCompacted))
   }
 
+  if (page.previewChars !== undefined) {
+    query.set('preview_chars', String(page.previewChars))
+  }
+
   const suffix = query.size ? `?${query.toString()}` : ''
 
   return hermesApi<SessionMessagesResponse>({
@@ -515,6 +519,8 @@ export function getSessionMessages(
  * store (see app/chat/transcript-backfill).
  */
 export const LATEST_SESSION_MESSAGES_LIMIT = 120
+// Display hydration opts in; full history/export retains complete authored bodies.
+export const HISTORY_PREVIEW_CHARS = 16384
 
 export function getLatestSessionMessages(
   id: string,
@@ -539,7 +545,8 @@ export function getLatestSessionMessages(
     {
       limit: LATEST_SESSION_MESSAGES_LIMIT,
       order: 'latest',
-      includeCompacted: true
+      includeCompacted: true,
+      previewChars: HISTORY_PREVIEW_CHARS
     },
     options
   ).then(async page => {
@@ -662,7 +669,7 @@ export function getOlderSessionMessages(
   offset: number,
   limit: number = LATEST_SESSION_MESSAGES_LIMIT
 ): Promise<SessionMessagesResponse> {
-  return getSessionMessages(id, profile, { includeCompacted: true, limit, offset, order: 'latest' })
+  return getSessionMessages(id, profile, { includeCompacted: true, limit, offset, order: 'latest', previewChars: HISTORY_PREVIEW_CHARS })
 }
 
 export async function getAllSessionMessages(
