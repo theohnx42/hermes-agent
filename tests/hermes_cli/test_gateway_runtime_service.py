@@ -564,13 +564,14 @@ def test_current_vendor_vbs_identity(tamper, tmp_path, monkeypatch):
     monkeypatch.setattr(gateway_windows, "_gateway_run_argv",
                         lambda *_: [sys.executable, "-m", "hermes_cli.main", "gateway", "run"])
     script = gateway_windows._build_gateway_vbs_script(sys.executable, str(home), str(home), "")
-    if tamper == "declaration":
-        script = script.replace("existing_pp, exitCode", "existing_pp")
-    elif tamper == "wait":
-        script = script.replace(", 0, True)", ", 0, False)")
-    elif tamper == "exit":
-        script = script.replace("WScript.Quit exitCode", "WScript.Quit 0")
-    elif tamper == "extra":
+    replacements = {
+        "declaration": ("existing_pp, exitCode", "existing_pp"),
+        "wait": (", 0, True)", ", 0, False)"),
+        "exit": ("WScript.Quit exitCode", "WScript.Quit 0"),
+    }
+    if tamper in replacements:
+        script = script.replace(*replacements[tamper])
+    if tamper == "extra":
         script += 'MsgBox "extra"\r\n'
     path = home / "gateway.vbs"
     path.write_text(script, encoding="utf-8")

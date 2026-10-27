@@ -39,7 +39,7 @@ def run_gate(repo, base_sha, tmp_path):
     step = next(s for s in data['jobs']['check-attribution']['steps'] if s.get('id') == 'check-emails')
     ctx = {'github': {'event': {'pull_request': {'base': {'sha': base_sha}}}}}
     env = dict(os.environ, PR_BASE_SHA=gha.render(step['env']['PR_BASE_SHA'], ctx), GITHUB_OUTPUT=str(tmp_path / 'output'))
-    return subprocess.run(['bash', '-c', step['run']], cwd=repo, env=env, text=True, capture_output=True, timeout=10)
+    return subprocess.run(['bash', '-c', step['run']], cwd=repo, env=env, text=True, capture_output=True, timeout=10, check=False)
 
 
 def test_stacked_pr_does_not_reaudit_old_unmapped_authors(history, tmp_path):
