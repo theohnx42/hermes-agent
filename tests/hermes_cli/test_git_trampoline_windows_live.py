@@ -14,6 +14,7 @@ locator targets — so the swap path is exercised end to end.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -33,6 +34,32 @@ def _make_broken_trampoline(tmp_path: Path) -> Path:
     bat = tmp_path / "git.bat"
     bat.write_text(_FORK_BOMB_BAT, encoding="utf-8")
     return bat
+
+
+def _locator_diagnostic() -> str:
+    """Failure-only evidence for the locator's exact candidates; never dump provider output."""
+    from hermes_cli.update_cmd_git import _GIT_TEXT_KW, _portable_git_candidates
+    from hermes_cli.update_custody import run_git
+
+    candidates = [Path(base) / "Git" / arch / "libexec" / "git-core" / "git.exe"
+                  for base in (r"C:\Program Files", r"C:\Program Files (x86)")
+                  for arch in ("clangarm64", "mingw64", "mingw32")]
+    candidates += _portable_git_candidates()
+    rows = []
+    for path in candidates[:8]:
+        row = {"path": str(path)}
+        try:
+            row.update(exists=path.exists(), regular=path.is_file(), symlink=path.is_symlink())
+            if row["regular"]:
+                # Same custody runner/encoding/flags as _probe_fork_bomb, but a
+                # tighter failure-diagnostic budget (at most eight two-second probes).
+                probe = run_git([str(path)], ["--version"], timeout=2, **_GIT_TEXT_KW)
+                row.update(returncode=probe.returncode,
+                           fork_bomb="fork bomb" in ((probe.stdout or "") + (probe.stderr or "")).lower())
+        except Exception as error:
+            row["error_class"] = type(error).__name__
+        rows.append(row)
+    return json.dumps(rows, sort_keys=True)
 
 
 class TestGitTrampolineLive:
@@ -60,7 +87,7 @@ class TestGitTrampolineLive:
         real = update_cmd._locate_real_git()
         # windows-latest ships Git for Windows under Program Files with the
         # canonical git-core layout the locator searches first.
-        assert real is not None, "expected git-core git.exe on windows-latest"
+        assert real is not None, "expected git-core git.exe on windows-latest: " + _locator_diagnostic()
         assert real.exists()
         assert real.name == "git.exe"
         probe = subprocess.run(
@@ -77,7 +104,7 @@ class TestGitTrampolineLive:
         broken_cmd = [str(bat), "-c", "windows.appendAtomically=false"]
         healed = update_cmd._ensure_non_trampoline_git(broken_cmd)
 
-        assert healed != broken_cmd, "broken trampoline must be swapped"
+        assert healed != broken_cmd, "broken trampoline must be swapped: " + _locator_diagnostic()
         assert healed[1:] == broken_cmd[1:], "git config args must survive"
         real = Path(healed[0])
         assert real.exists() and real.name == "git.exe"

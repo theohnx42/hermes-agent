@@ -97,17 +97,46 @@ def test_a7_concurrent_claimants_over_a_dead_marker_yield_one_owner(tmp_path: Pa
 
 # -- the update child is the delegate before it runs anything ------------------
 
-FIND_UPDATE_CHILD = r"""
-param([int]$Parent, [int]$Seconds)
-$deadline = (Get-Date).AddSeconds($Seconds)
-while ((Get-Date) -lt $deadline) {
-    $row = Get-CimInstance Win32_Process -Filter "ParentProcessId=$Parent" |
-        Where-Object { $_.CommandLine -match '--yes' } | Select-Object -First 1
-    if ($row) { [Console]::Out.Write($row.ProcessId); exit 0 }
-    Start-Sleep -Milliseconds 100
-}
-exit 1
-"""
+def _update_child(parent: int) -> int | None:
+    """Read the direct child's native argv without a potentially unbounded WMI query."""
+    import psutil
+
+    try:
+        matches = [child.pid for child in psutil.Process(parent).children(recursive=False)
+                   if {"update", "--yes"}.issubset(child.cmdline())]
+    except (psutil.Error, OSError):
+        return None
+    return matches[0] if len(matches) == 1 else None
+
+
+@pytest.mark.parametrize("commands,expected", [
+    ([["python", "hermes", "update", "--yes"]], 10),
+    ([["python", "--version"], ["python", "update", "--yes"]], 11),
+    ([["python", "update", "--yesman"]], None),
+    ([["python", "not-update", "--yes"]], None),
+    ([["python", "update", "--yes"], ["python", "update", "--yes"]], None),
+    ([], None),
+])
+def test_update_child_requires_one_exact_direct_child(commands, expected, monkeypatch):
+    from types import SimpleNamespace
+    import psutil
+
+    children = [SimpleNamespace(pid=10 + index, cmdline=lambda argv=argv: argv)
+                for index, argv in enumerate(commands)]
+    def children_of_parent(recursive):
+        assert recursive is False
+        return children
+    monkeypatch.setattr(psutil, "Process", lambda pid: SimpleNamespace(children=children_of_parent))
+    assert _update_child(123) == expected
+
+
+def test_update_child_unreadable_is_not_an_identity(monkeypatch):
+    import psutil
+
+    def denied(pid):
+        raise psutil.AccessDenied(pid)
+    monkeypatch.setattr(psutil, "Process", denied)
+    assert _update_child(123) is None
 
 
 @pytest.mark.platforms('windows')
@@ -122,8 +151,6 @@ def test_script_killed_before_publishing_the_delegate_runs_no_update(tmp_path: P
     hold = tmp_path / 'release-update'
     ran = Path(str(hold) + '.pid')
     marker = home / MARKER
-    finder = tmp_path / 'find_child.ps1'
-    finder.write_text(FIND_UPDATE_CHILD, encoding='utf-8')
     script = _script(home, install=install, HANDOFF_HOLD=str(hold))
     lock = None
     try:
@@ -133,11 +160,10 @@ def test_script_killed_before_publishing_the_delegate_runs_no_update(tmp_path: P
             assert time.monotonic() < deadline and script.poll() is None, 'script never claimed'
             time.sleep(0.02)
         lock = _HeldLock(home)   # after the claim, before the delegate publication
-        child = subprocess.run([POWERSHELL, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(finder),
-                                '-Parent', str(script.pid), '-Seconds', '60'],
-                               capture_output=True, text=True, timeout=90, check=False)
-        assert child.returncode == 0, 'the update child never appeared'
-        watch = _ProcessWatch(int(child.stdout))
+        from tests.waiting import wait_until
+        child = wait_until(lambda: _update_child(script.pid), timeout=60,
+                           what="the suspended update child to appear")
+        watch = _ProcessWatch(child)
         try:
             subprocess.run(['taskkill', '/F', '/PID', str(script.pid)], capture_output=True, check=True)
             script.wait(timeout=30)
