@@ -32,6 +32,12 @@ The browse schema reconciler now classifies an interrupted `BEGIN IMMEDIATE` wit
 
 The completed first CI run also reported JavaScript and Windows-specific failures. These remain under source/fixture diagnosis; this proof does not declare the full hosted run green.
 
+## Second hosted execution and follow-up corrections
+
+Run `40526503589` at `e8be539454ee084fe99df16021d35f3d76c66d47` completed. The formerly failing Python slices 9, 10, 12 and 15, contributor attribution, both Windows ARM slices, and macOS slice 1 passed. The JS workspace run passed its runtime suites and failed desktop type checking because the new connection fixtures omitted required fields. The correction supplies the full actual `HermesConnection` shape, with no casts or product changes. Using the lockfile's existing TypeScript 6.0.3, extraction of the actual published interface and both actual fixture objects reproduces two TS2345 errors on that head and zero on the corrected objects; this is a targeted data-contract check, not a full local SDK typecheck.
+
+Ruff and code-health also identified two new test-policy findings; explicit `check=False` and a replacement table preserve the assertions. All changed Python files now pass Ruff, and the actual health command reports zero blocking/advisory findings against the real PR base. Windows x64 retained two Git locator failures and one immediate suspended-state observation failure; the source-qualified UCRT64 and bounded-observation follow-ups are documented in `windows-consumer-candidate.json`. Local Git discovery tests passed 15 cases with three native skips. A full new hosted run is still required; no live adoption or full-green claim follows from these local checks.
+
 ## JavaScript first-run workload and SDK fixture correction
 
 The hosted JS job ran ten workspace checks with four concurrent checks on the four-core fork host. Each check can start its own worker pool. The staged-Git integration test reached its existing 5-second test ceiling; the exact unchanged test independently passed locally in 1.498 seconds. The Desktop UI check took 1262 seconds while competing with other checks. This supports a fork resource-admission correction, not a new per-test timeout or a claim that disk was exhausted. ENOSPC strings elsewhere in the UI log came from deliberate error-path fixtures and were not the failing assertion.

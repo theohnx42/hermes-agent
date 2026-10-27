@@ -31,7 +31,17 @@ describe('host.warmProfile routing contract', () => {
   beforeEach(() => {
     warmMocks.openGatewayForProfile.mockClear()
     warmMocks.openGatewayForAgent.mockClear()
-    setConnection({ baseUrl: 'https://fixture.invalid', isFullscreen: false, mode: 'remote', profile: 'default' })
+    setConnection({
+      baseUrl: 'https://fixture.invalid',
+      isFullscreen: false,
+      logs: [],
+      mode: 'remote',
+      nativeOverlayWidth: 0,
+      profile: 'default',
+      token: '',
+      windowButtonPosition: null,
+      wsUrl: 'wss://fixture.invalid'
+    })
   })
 
   afterEach(() => setConnection(null))
@@ -43,7 +53,17 @@ describe('host.warmProfile routing contract', () => {
   })
 
   it('does not start a local profile speculatively', () => {
-    setConnection({ baseUrl: '', isFullscreen: false, mode: 'local', profile: 'default' })
+    setConnection({
+      baseUrl: '',
+      isFullscreen: false,
+      logs: [],
+      mode: 'local',
+      nativeOverlayWidth: 0,
+      profile: 'default',
+      token: '',
+      windowButtonPosition: null,
+      wsUrl: ''
+    })
 
     host.warmProfile('cold-local-slot')
 
