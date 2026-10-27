@@ -113,3 +113,17 @@ def test_fork_runner_selection_does_not_grant_docker_publication():
         parsed = workflow(name)
         assert parsed['permissions'].get('contents') == 'read'
         assert 'secrets' not in parsed
+
+
+@pytest.mark.parametrize('repository,limit,args', [(UPSTREAM, 30, []), (FORK, 60, ['--concurrency', '1'])])
+def test_fork_workspace_admission_retains_all_checks(repository, limit, args):
+    import shlex
+
+    job = workflow('js-tests.yml')['jobs']['check']
+    ctx = context(repository)
+    assert int(gha.render(job['timeout-minutes'], ctx)) == limit
+    step = next(s for s in job['steps'] if s.get('name') == 'Run all workspace checks')
+    command = re.sub(r'\$\{\{(.*?)\}\}', lambda match: gha.to_string(gha.evaluate(match[1], ctx)), step['run'])
+    assert shlex.split(command) == ['node', '.github/scripts/run-workspace-checks.mjs', *args]
+    assert 'if' not in step
+    assert not step.get('continue-on-error', False)

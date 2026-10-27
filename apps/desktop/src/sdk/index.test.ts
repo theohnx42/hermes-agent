@@ -3,7 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ackComposerInsert } from '@/app/chat/composer/focus'
 import { createClientSessionState } from '@/lib/chat-runtime'
 import { host } from '@/sdk'
-import { $selectedStoredSessionId, setActiveSessionId, setAwaitingResponse, setBusy } from '@/store/session'
+import {
+  $selectedStoredSessionId,
+  setActiveSessionId,
+  setAwaitingResponse,
+  setBusy,
+  setConnection
+} from '@/store/session'
 import { clearAllSessionStates, publishSessionState } from '@/store/session-states'
 
 // The warm path must route through the guarded prewarm resolver (hover dwell,
@@ -25,12 +31,24 @@ describe('host.warmProfile routing contract', () => {
   beforeEach(() => {
     warmMocks.openGatewayForProfile.mockClear()
     warmMocks.openGatewayForAgent.mockClear()
+    setConnection({ baseUrl: 'https://fixture.invalid', isFullscreen: false, mode: 'remote', profile: 'default' })
   })
+
+  afterEach(() => setConnection(null))
 
   it('dials the profile through the guarded prewarm path', () => {
     host.warmProfile('warm-free-slot')
 
     expect(warmMocks.openGatewayForProfile).toHaveBeenCalledWith('warm-free-slot')
+  })
+
+  it('does not start a local profile speculatively', () => {
+    setConnection({ baseUrl: '', isFullscreen: false, mode: 'local', profile: 'default' })
+
+    host.warmProfile('cold-local-slot')
+
+    expect(warmMocks.openGatewayForProfile).not.toHaveBeenCalled()
+    expect(warmMocks.openGatewayForAgent).not.toHaveBeenCalled()
   })
 
   it('ignores an empty profile name', () => {
