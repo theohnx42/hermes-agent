@@ -61,3 +61,27 @@ Observed total file wall was 4310.6 seconds versus 1079.9 runner seconds at four
 Local validation: seven policy tests passed in 3.42 seconds with existing PM Python 3.14.7 and the private copied pytest framework (hosted CI uses 3.14.9). The revised policy test fails against the unchanged baseline worker setting. Full YAML semantic comparison found only the two allowed leaves changed: OS worker environment and OS job admission ceiling. Actual-base code health reports zero blocking/advisory findings; changed Python Ruff and diff checks pass. Home/live-system guards stayed enabled; no packages were installed.
 
 Independent coordinator verification matched the exact workflow/policy-test hashes and reran the same full-source private-fixture policy suite: seven tests passed in 6.12 seconds. This remains source/policy evidence; hosted native acceptance is pending.
+
+
+### ARM budget follow-up: reviewed source candidate
+
+Published PR7 head671d3d2/run40572669947 passed x64. ARM slice2/2 passed
+eleven of twelve commit-outcome tests before the unchanged300-second file
+limit stopped the final bounded-help test at301.10s. No assertion failure or
+production timeout defect is established; handoff-lineage finished291.64s.
+
+The reviewed candidate moves only that unchanged test into the existing
+Python-handoff/runtime-probe module, importing the same real-launcher helper.
+Destination was selected in the ARM list and absent from top10 durations
+(tenth19.36s); this is an inferred upper bound, not an exact measurement.
+Both GitHub artifact routes returned invalid ZIP data. Exact test AST including
+decorators is unchanged; production, probe10s, handoff120s, file300s, workers2,
+assertions and cleanup guards are preserved.
+
+Resume from owned hermes-windows-worker-budget-20261027 worktree. Root approved normal publication; native hosted acceptance remains required. No rerun, merge, runtime action or PR6 base
+advance occurred. Failed log: /tmp/phoenix-pr7-arm-671d-122430823482-20261027.log.
+
+Source-equivalence validation preserved all13 test-function ASTs/decorators across
+both modules. Actual pytest import/collection returned23 parametrized cases in
+0.15s using the existing Git-free full-source/PM3.14.7 test overlay. Both changed
+Python files passed Ruff and the diff check. No native claim follows collection.

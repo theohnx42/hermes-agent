@@ -166,5 +166,31 @@
       "tests/ci/test_fork_hosted_runners.py": "ebc48390bc15ed39fc51304265cc3adb3287943d4239f467ed3d0a0ed48dcdcf",
       "docs/proof/2026-10-27-fork-ci-runners/README.md": "ea826ef2370e7a6337ff5df8a6e6c2ab5e50a621b9b1f2561d4ffbe04e59d50d"
     }
+  },
+  "arm_remaining_budget_followup": {
+    "status": "REVIEWED_SOURCE_CANDIDATE_NATIVE_ACCEPTANCE_PENDING",
+    "published_head": "671d3d2edaac0e9ad2838fe1e4dff27200136f77",
+    "run": 40572669947,
+    "job": 122430823482,
+    "observed": "11/12 tests PASS then whole-file300s cutoff during last bounded-help test; no assertion failure",
+    "file_seconds": 301.1,
+    "destination_duration": "Selected ARM file absent top10, tenth19.36s; inferred bound only. Artifact unavailable: invalid ZIP",
+    "validation": {
+      "test_function_asts_including_decorators": "13 identical across both files",
+      "actual_import_collection": "23 parametrized tests collected in0.15s under Git-free actual source projection with existingPM3.14.7/pytest overlay; shared helper import succeeds",
+      "ruff": "2 changed Python files PASS",
+      "diff_check": "PASS"
+    },
+    "preserved": [
+      "production",
+      "probe10s",
+      "handoff120s",
+      "file300s",
+      "workers2",
+      "assertions",
+      "cleanup guards"
+    ],
+    "runtime_actions": [],
+    "resume": "Root approved ordinary PR7 publication; native CI acceptance remains required. PR6 frozen until full green and accepted base advance."
   }
 }
