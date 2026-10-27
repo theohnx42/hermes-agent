@@ -79,7 +79,7 @@ decorators is unchanged; production, probe10s, handoff120s, file300s, workers2,
 assertions and cleanup guards are preserved.
 
 Resume from owned hermes-windows-worker-budget-20261027 worktree. Root approved normal publication; native hosted acceptance remains required. No rerun, merge, runtime action or PR6 base
-advance occurred. Failed log: /tmp/phoenix-pr7-arm-671d-122430823482-20261027.log.
+advance occurred. Failed log artifact: `phoenix-pr7-arm-671d-122430823482-20261027.log`.
 
 Source-equivalence validation preserved all13 test-function ASTs/decorators across
 both modules. Actual pytest import/collection returned23 parametrized cases in
