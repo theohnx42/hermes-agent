@@ -85,23 +85,23 @@ jobs:
           # Two slices: on the old free standard runner (3 cores, 3 workers) one lane ran
           # ~7.5 min and became the slowest required job once the Linux suite split.
           - name: macOS-only tests (1/2)
-            runner: blacksmith-12vcpu-macos-latest
+            runner: ${{ github.repository == 'NousResearch/hermes-agent' && 'blacksmith-12vcpu-macos-latest' || 'macos-15' }}
             marker: macos
             slice: 1/2
           - name: macOS-only tests (2/2)
-            runner: blacksmith-12vcpu-macos-latest
+            runner: ${{ github.repository == 'NousResearch/hermes-agent' && 'blacksmith-12vcpu-macos-latest' || 'macos-15' }}
             marker: macos
             slice: 2/2
           - name: Windows-only tests
-            runner: blacksmith-32vcpu-windows-2025
+            runner: ${{ github.repository == 'NousResearch/hermes-agent' && 'blacksmith-32vcpu-windows-2025' || 'windows-2025' }}
             marker: windows
           - name: Windows-only tests (arm64, 1/2)
-            runner: windows-latest-32-arm-core
+            runner: ${{ github.repository == 'NousResearch/hermes-agent' && 'windows-latest-32-arm-core' || 'windows-11-arm' }}
             marker: windows
             timeout: 60
             slice: 1/2
           - name: Windows-only tests (arm64, 2/2)
-            runner: windows-latest-32-arm-core
+            runner: ${{ github.repository == 'NousResearch/hermes-agent' && 'windows-latest-32-arm-core' || 'windows-11-arm' }}
             marker: windows
             timeout: 60
             slice: 2/2
@@ -199,7 +199,7 @@ jobs:
         env:
           # These files spawn nested PowerShell trees. CPU-count parallelism
           # starves cold child startup before the fixture's idle deadline.
-          HERMES_TEST_WORKERS: ${{ matrix.marker == 'windows' && (runner.arch == 'ARM64' && '16' || '16') || '' }}
+          HERMES_TEST_WORKERS: ${{ matrix.marker == 'windows' && (github.repository == 'NousResearch/hermes-agent' && '16' || '4') || '' }}
           HERMES_TEST_SLICE: ${{ matrix.slice || '' }}
           # Belt-and-suspenders with tests/conftest.py's env blanking: no
           # test may reach a real provider API.
