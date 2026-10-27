@@ -1,0 +1,66 @@
+{
+  "source_base": "e5dd0631b836d990a4b3d4021dd507d53b433d90",
+  "trigger": {
+    "node": "KESTREL",
+    "session": "20261026_204454_cb191d10",
+    "native_log_local_time": "2026-10-26 20:55:16,772",
+    "event": "concurrent tool batch timed out after 420.0s; 4 tool(s) still running: skill_view, skill_view, skill_view, skill_view",
+    "individual_filesystem_stall_not_identified": true
+  },
+  "validation": {
+    "command": "HERMES_PYTHON=/home/austin/.hermes/hermes-agent/.venv/bin/python HERMES_TEST_FILE_RETRIES=0 bash scripts/run_tests.sh tests/tools/test_skill_lookup_singleflight.py tests/tools/test_skills_tool.py tests/agent/test_skill_utils.py -j 2 --file-timeout 60",
+    "passed": 84,
+    "failed": 0,
+    "seconds": 8.9,
+    "ruff": "PASS",
+    "diff_check": "PASS"
+  },
+  "native_probe": {
+    "node": "KESTREL",
+    "mode": "separate bounded read-only process; no installed module replacement",
+    "root": "/Users/austinweiss/.hermes/skills",
+    "deadline_seconds": 90,
+    "cold_batch_seconds": 41.0179,
+    "warm_batch_seconds": 0.1625,
+    "cold_signature_calculations": 1,
+    "cold_active_candidate_walks": 1,
+    "cold_legacy_candidate_walks": 1,
+    "warm_signature_calculations": 1,
+    "warm_active_candidate_walks": 0,
+    "warm_legacy_candidate_walks": 0,
+    "overlay_sha256": {
+      "tools/skills_tool.py": "2aeaf0893502958d41c3d11e481673484568c07235f0201080f89366f497b840",
+      "agent/skill_utils.py": "db39d0019d36ddb89d2a21dba195dad154448e1995d930a055701b739f8e5ff4"
+    },
+    "runtime_preimage_sha256": {
+      "tools/skills_tool.py": "a5fac64ae3c2f2496cd7da46aacd396d6a50a0dd5d9f4ef4d1ba2d8d7ba9df2f",
+      "agent/skill_utils.py": "fbf04204de0e7ab29e694aea2b099f971955e94223866b8abee545855eb2d3d0"
+    },
+    "resolved": [
+      {"name": "phoenix-kestrel-command-desk", "relative_path": "phoenix-kestrel/phoenix-kestrel-command-desk/SKILL.md", "sha256": "2aa507d20daed8894f62b45d8368561b38831d37afa31061509cca497b32e3bf"},
+      {"name": "phoenix-kestrel-mesh-desk", "relative_path": "phoenix-kestrel-mesh-desk/SKILL.md", "sha256": "3c2ad63bb26742054f38f9cf465b0efd4ae3fd294b3bc356bfc1403f41f2f3d5"},
+      {"name": "phoenix-kestrel-brain", "relative_path": "phoenix-kestrel-brain/SKILL.md", "sha256": "82d51bf616f36d2f10a9bbd3f281453000e78e3366e3ea1d1a18fbaef56fb8b0"},
+      {"name": "phoenix-mesh/mandatory-tool-ladder", "relative_path": "phoenix-mesh/mandatory-tool-ladder/SKILL.md", "sha256": "d337157e5031e07ec9bfd7fc544c064f8ad94f2a70e459b9767a9c3e2127ee43"}
+    ],
+    "skill_activations": 0,
+    "provider_calls": 0,
+    "live_owner_import_changes": 0
+  },
+  "adoption": {
+    "status": "NOT_DEPLOYED",
+    "requirements": [
+      "Independent source review and publication first.",
+      "Requalify the current native owner and preserve the existing timed-out but continuing turn; do not resend it.",
+      "CAS only reviewed hunks onto exact deployed preimages, with private backups; do not overwrite whole modules from a different runtime generation.",
+      "The older deployed skills_tool needs the already-published deep directory signature carry as well as this correction; preserve its private/public API names and all unrelated code.",
+      "Activate only after owner quiescence through its existing supported lifecycle, preserving authenticated surfaces and unsent work.",
+      "Read back loaded-source provenance and a fresh same-owner bounded lookup before claiming runtime repair."
+    ],
+    "limitations": [
+      "Cold native discovery still took41seconds; this is not an instant-response guarantee.",
+      "Cycle guards are regression-tested; an actual production symlink cycle was not identified.",
+      "Zero-inode fallback is tested as filesystem data; no native Windows performance claim.",
+      "This does not repair expired A2A waiter delivery or acknowledge the unfinished original check-in."
+    ]
+  }
+}
