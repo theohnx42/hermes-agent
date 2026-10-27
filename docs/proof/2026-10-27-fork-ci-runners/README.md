@@ -15,3 +15,11 @@ Official runner contracts:
 - https://docs.blacksmith.sh/blacksmith-runners/overview
 - https://www.blacksmith.sh/pricing
 - https://github.com/useblacksmith/checkout/blob/25227e61ff9dafe400e22fa487b673eac4e4409a/src/blacksmith-cache.ts
+
+## First hosted execution and stacked attribution scope
+
+Automatic PR7 runs at head `cb5ca419e3f5e9bfda17f749cf695e78775d529d` admitted real GitHub-hosted runners: CI `40511400545`, Docker `40511400342`, and Nix `40511400347`. Docker and Nix completed successfully. Main CI exposed real test failures and is not qualified green.
+
+Attribution job `122214051244` failed because its existing shell step unconditionally merge-based against `origin/main`, including historical stack commits. PR7's actual base was `e5dd0631b836d990a4b3d4021dd507d53b433d90`; its own range contained exactly two commits, both authored through the existing GitHub ID+noreply policy. No historical identities were invented or added.
+
+The follow-up uses the event's actual PR base SHA, quoted through an environment variable, while retaining the existing main comparison for non-PR callers. Strict shell failure prevents a missing base from becoming an empty successful check. Four real temporary-Git-history regressions execute the complete workflow shell step: accepted historical stack authors are excluded, a genuinely new unmapped author still fails, non-PR callers retain their main range, and a missing base fails closed. All four passed in 3.0 seconds through the canonical runner; Ruff and diff checks passed. This scope correction does not weaken mapping policy, change identities, or claim the other hosted failures are repaired.
