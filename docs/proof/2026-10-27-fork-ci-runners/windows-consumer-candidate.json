@@ -25,9 +25,31 @@
     "native_windows": "pending"
   },
   "git_locator": {
-    "classification": "Unresolved: CI logs do not distinguish absent candidate from custody probe exception.",
-    "change": "Failure-only candidate metadata and same custody runner --version error class/returncode, two-second per-candidate budget, maximum eight candidates. No raw stdout/stderr/env. No production locator change.",
-    "native_evidence": "Readonly NIGHTFALL query finds both git-core/git.exe and mingw64/bin/git.exe. CI checkout uses C:/Program Files/Git/bin/git.exe 2.56.0.windows.2; this does not prove internal layout."
+    "classification": "Initial failure lacked layout evidence; subsequent official release/archive qualification proves UCRT64 path omission. Native CI diagnostic still pending.",
+    "change": "Initial diagnostic-only stage superseded by verified UCRT64 follow-up below. Current bounded diagnostics cover twelve candidates, with two-second custody probes, metadata/error class/return code only and no raw stdout/stderr/env.",
+    "native_evidence": "Readonly NIGHTFALL query finds both git-core/git.exe and mingw64/bin/git.exe. CI checkout uses C:/Program Files/Git/bin/git.exe 2.56.0.windows.2; this does not prove internal layout.",
+    "ucrt64_followup": {
+      "release": "https://github.com/git-for-windows/git/releases/tag/v2.56.0.windows.2",
+      "asset": "MinGit-2.56.0.2-64-bit.zip",
+      "sha256": "da35e72aa21c005a5a0d298cfbae110bc1609a815730ea0dde84b01a1b3cd3be",
+      "digest_verified": true,
+      "archive_git_executables": [
+        "cmd/git.exe",
+        "ucrt64/bin/git.exe"
+      ],
+      "absent": "ucrt64/libexec/git-core/git.exe",
+      "execution_or_install": false,
+      "candidate": "Append exact ucrt64/bin/git.exe standard and managed portable candidates; preserve legacy ordering and definite accepted probe requirement.",
+      "baseline_regression": {
+        "failed": 4,
+        "passed": 9
+      },
+      "candidate_test_file": {
+        "passed": 15,
+        "skipped": 3
+      },
+      "diagnostic_budget": "Twelve candidates maximum, two-second custody probe per existing regular file; no raw output or env."
+    }
   },
   "runner": {
     "python": "existing PM Python 3.14.7; CI 3.14.9",
@@ -41,7 +63,9 @@
   "source_sha256": {
     "hermes_cli/gateway_runtime_service_identity.py": "25a91b6b08063941cb08e582b35541863293bdd2495ef66e341089a3fae48428",
     "tests/hermes_cli/test_gateway_runtime_service.py": "df0571ba9fda85157b97fbec4a65aeb4c3fad34576bbbe56921c9ad8b63b6015",
-    "tests/hermes_cli/test_git_trampoline_windows_live.py": "a6aed2a7a2e3a2d525bd278ae1bee116664bdf57813d0a44513d42e55e6bb8f1",
-    "tests/scripts/desktop_update/test_desktop_update_windows_marker_lock.py": "f48b04cb95b456be13153d68bf043810f6b1fafdfaa9b96fa24aae9c5c9b81e7"
+    "tests/hermes_cli/test_git_trampoline_windows_live.py": "88831260686f49ec5921a9403b13e53982ec43de91718adac7c6b3bcb44e93fa",
+    "tests/scripts/desktop_update/test_desktop_update_windows_marker_lock.py": "f48b04cb95b456be13153d68bf043810f6b1fafdfaa9b96fa24aae9c5c9b81e7",
+    "hermes_cli/update_cmd_git.py": "200ea2096b9671d096403f462ee911a8d052128d4b64a38cc4885c1fccd912c0",
+    "tests/hermes_cli/test_cmd_update.py": "aa597a08bf15873f204972fd5b1fe7e42edad1ce5d7c2e8aec04b62eae096300"
   }
 }

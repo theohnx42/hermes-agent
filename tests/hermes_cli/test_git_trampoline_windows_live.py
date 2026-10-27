@@ -44,15 +44,17 @@ def _locator_diagnostic() -> str:
     candidates = [Path(base) / "Git" / arch / "libexec" / "git-core" / "git.exe"
                   for base in (r"C:\Program Files", r"C:\Program Files (x86)")
                   for arch in ("clangarm64", "mingw64", "mingw32")]
+    candidates += [Path(base) / "Git" / "ucrt64" / "bin" / "git.exe"
+                   for base in (r"C:\Program Files", r"C:\Program Files (x86)")]
     candidates += _portable_git_candidates()
     rows = []
-    for path in candidates[:8]:
+    for path in candidates[:12]:
         row = {"path": str(path)}
         try:
             row.update(exists=path.exists(), regular=path.is_file(), symlink=path.is_symlink())
             if row["regular"]:
                 # Same custody runner/encoding/flags as _probe_fork_bomb, but a
-                # tighter failure-diagnostic budget (at most eight two-second probes).
+                # tighter failure-diagnostic budget (at most twelve two-second probes).
                 probe = run_git([str(path)], ["--version"], timeout=2, **_GIT_TEXT_KW)
                 row.update(returncode=probe.returncode,
                            fork_bomb="fork bomb" in ((probe.stdout or "") + (probe.stderr or "")).lower())
