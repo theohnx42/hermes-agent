@@ -122,5 +122,49 @@
       "path": ".github/workflows/uv-lockfile-check.yml",
       "candidate_sha256": "65c0adf66f7fab0b6ace7958d3f1ee216c51bc7af6cec82f8b7772b4c40d00ea"
     }
-  ]
+  ],
+  "windows_resource_followup": {
+    "source_base": "3b822093f993114eab72f0552628224e082090d0",
+    "status": "SOURCE_CANDIDATE_NATIVE_HOSTED_ACCEPTANCE_PENDING",
+    "evidence": {
+      "run_id": 40564037603,
+      "x64_job_id": 122400521911,
+      "assertions_passed": 736,
+      "assertions_failed": 0,
+      "timed_out_files": {
+        "test_desktop_update_windows_commit_outcome.py": "6/12 cases passed before300s",
+        "test_desktop_update_windows_handoff_lineage.py": "8/10 cases passed before300s"
+      },
+      "total_file_wall_seconds": 4310.6,
+      "runner_seconds": 1079.9,
+      "workers": 4,
+      "p99_file_seconds": 299.44,
+      "max_file_seconds": 301.8
+    },
+    "candidate": {
+      "fork_windows_workers": 2,
+      "upstream_windows_workers": 16,
+      "fork_x64_job_minutes": 45,
+      "upstream_x64_and_all_macos_minutes": 30,
+      "explicit_arm_minutes": 60,
+      "per_test_file_limits_selection_shards_and_failure_gates": "UNCHANGED",
+      "budget_basis": "4310.6 / 2 = 2155.3s = 35.9min without assumed speedup; fork x64 job45min admits measured workload plus setup/cleanup."
+    },
+    "checks": {
+      "policy_pytest": "7 PASS /3.42s",
+      "baseline_new_policy_test": "1 FAIL /6 deselected /0.90s against unchanged worker4 baseline",
+      "yaml_semantics": "Identical after removing only jobs.os-tests.timeout-minutes and RunTests env.HERMES_TEST_WORKERS",
+      "actual_base_code_health": "0 blocking /0 advisory",
+      "changed_python_ruff": "PASS",
+      "diff_check": "PASS",
+      "independent_coordinator": "Exact workflow/test hashes matched; same full-source policy suite7PASS/6.12s"
+    },
+    "runtime_changes": false,
+    "inference_or_native_children": 0,
+    "candidate_sha256": {
+      ".github/workflows/tests-os.yml": "0c54f095fdfc36b8a2dcd41f293c01a411cfd9e7d951578f4d4fce38f5446d9c",
+      "tests/ci/test_fork_hosted_runners.py": "ebc48390bc15ed39fc51304265cc3adb3287943d4239f467ed3d0a0ed48dcdcf",
+      "docs/proof/2026-10-27-fork-ci-runners/README.md": "ea826ef2370e7a6337ff5df8a6e6c2ab5e50a621b9b1f2561d4ffbe04e59d50d"
+    }
+  }
 }

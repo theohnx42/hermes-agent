@@ -97,8 +97,14 @@ def test_native_architecture_and_upstream_labels_preserved():
         else:
             assert (upstream, fork) == ('blacksmith-32vcpu-windows-2025', 'windows-2025')
     run = next(s for s in workflow('tests-os.yml')['jobs']['os-tests']['steps'] if 'HERMES_TEST_WORKERS' in s.get('env', {}))
-    for repository, workers in [(UPSTREAM, '16'), (FORK, '4')]:
-        assert gha.render(run['env']['HERMES_TEST_WORKERS'], context(repository, matrix={'marker': 'windows'})) == workers
+    for repository, workers in [(UPSTREAM, '16'), (FORK, '2')]:
+        for row in rows:
+            ctx = context(repository, matrix=row)
+            expected_workers = workers if row['marker'] == 'windows' else ''
+            assert gha.render(run['env']['HERMES_TEST_WORKERS'], ctx) == expected_workers
+            # Existing ARM overrides win; only fork x64 receives a workload budget.
+            limit = row.get('timeout') or (45 if repository == FORK and row['marker'] == 'windows' else 30)
+            assert int(gha.render(workflow('tests-os.yml')['jobs']['os-tests']['timeout-minutes'], ctx)) == limit
 
 
 def test_fork_runner_selection_does_not_grant_docker_publication():

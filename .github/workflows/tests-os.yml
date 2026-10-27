@@ -77,7 +77,9 @@ jobs:
   os-tests:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ matrix.timeout || 30 }}
+    # At two workers, observed 4310.6s of file wall needs 35.9 min without a speedup;
+    # admit that workload on fork x64 only. ARM's explicit 60 and upstream/mac stay unchanged.
+    timeout-minutes: ${{ matrix.timeout || (github.repository != 'NousResearch/hermes-agent' && matrix.marker == 'windows' && 45 || 30) }}
     strategy:
       fail-fast: false
       matrix:
@@ -199,7 +201,7 @@ jobs:
         env:
           # These files spawn nested PowerShell trees. CPU-count parallelism
           # starves cold child startup before the fixture's idle deadline.
-          HERMES_TEST_WORKERS: ${{ matrix.marker == 'windows' && (github.repository == 'NousResearch/hermes-agent' && '16' || '4') || '' }}
+          HERMES_TEST_WORKERS: ${{ matrix.marker == 'windows' && (github.repository == 'NousResearch/hermes-agent' && '16' || '2') || '' }}
           HERMES_TEST_SLICE: ${{ matrix.slice || '' }}
           # Belt-and-suspenders with tests/conftest.py's env blanking: no
           # test may reach a real provider API.

@@ -1,8 +1,10 @@
 # Public-fork CI runner qualification — 2026-10-27
 
+The original runner-migration scope below is retained as provenance; later follow-ups supersede only their stated worker/job-budget observations.
+
 PR6 remained queued for approximately ten hours because its first CI, Nix and Docker jobs requested Blacksmith runners with no assigned runner. This source change supplies GitHub-hosted runners for public forks while preserving the exact upstream NousResearch runner choices.
 
-The PR-call graph uses native Ubuntu 24.04 x64, Windows 2025 x64, Windows 11 ARM, and macOS 15 ARM runners. The Linux unit suite retains full discovery and file isolation: upstream runs two slices with 32 workers each; forks run sixteen disjoint slices with four workers each. Windows fork workers are bounded at four. Existing JS/Rust/Nix host-core sizing is reused.
+The PR-call graph uses native Ubuntu 24.04 x64, Windows 2025 x64, Windows 11 ARM, and macOS 15 ARM runners. The Linux unit suite retains full discovery and file isolation: upstream runs two slices with 32 workers each; forks run sixteen disjoint slices with four workers each. The initial Windows fork cap was four; the measured resource follow-up below narrows it to two. Existing JS/Rust/Nix host-core sizing is reused.
 
 Pinned Blacksmith checkout already declines its cache path without a Blacksmith agent; its pinned source was inspected. Docker build/publish repository fences, permissions, triggers, conditional lanes, action pins, concurrency and timeouts are unchanged. Manual/release-only E2E and publishing workflows retain their existing runner policy. No service, secret, provider, self-hosted runner or runtime was changed.
 
@@ -47,3 +49,15 @@ The existing workspace dispatcher now admits one check at a time on forks, with 
 The SDK `warmProfile` test had an old fixture: it expected a dial without an eligible remote connection. Existing accepted production code deliberately returns without starting local, SSH or unknown-route profiles speculatively. The test now supplies a remote fixture for the permitted path and independently asserts a local profile stays idle; production behavior is unchanged. Both failing JS test sources were byte-identical between PR2's base and the first PR7 run. Local canonical SDK collection remains dependency-blocked: the reused dependency tree lacks current `@rolldown/plugin-babel` and `blobatar` packages. No SDK PASS is claimed; current-lockfile hosted execution remains required. No dependency installation or live app action was performed.
 
 Follow-up local validation: 13 tests passed in 11.2 seconds across the fork runner/workspace policy, real-Git attribution range and workflow dependency graph suites. SDK test formatting passed against the exact tracked Prettier configuration; Ruff and diff checks passed. These policy tests do not replace the pending canonical SDK/hosted workspace execution.
+
+## Windows fork worker resource admission — completed head 3b822093f9
+
+Run 40564037603, Windows x64 job 122400521911, completed the available assertions with 736 passed / 0 failed, but two file subprocesses hit their unchanged 300-second ceilings: `test_desktop_update_windows_commit_outcome.py` after 6/12 passing cases and `test_desktop_update_windows_handoff_lineage.py` after 8/10. The gate correctly remained red. Git UCRT64, process identity and suspended-state assertions passed; this evidence supports a workload-budget candidate, not a new assertion fix or proof that every timed-out case is correct.
+
+The four-core fork host ran four file workers (one core per worker); the existing upstream 32-core pool runs 16 (two cores per worker). Fork Windows jobs now use two workers in that same pool, preserving every existing file, selector, shard, retry/failure rule and per-test/per-file timeout. macOS and upstream worker policy are unchanged. No native NIGHTFALL process probe or app/runtime action is part of this change.
+
+Observed total file wall was 4310.6 seconds versus 1079.9 runner seconds at four workers; P99 was 299.44 seconds and maximum 301.80 seconds. Without assuming a speedup, two workers need 35.9 minutes for that measured workload. Only the fork x64 job receives a 45-minute admission ceiling for this workload plus setup/cleanup; upstream x64/mac remain 30 minutes, and both explicit ARM rows remain 60. This changes job admission, not the 300-second file ceiling. A new hosted run must establish whether contention relief resolves these timeouts; no green/native-completion claim follows from policy replay.
+
+Local validation: seven policy tests passed in 3.42 seconds with existing PM Python 3.14.7 and the private copied pytest framework (hosted CI uses 3.14.9). The revised policy test fails against the unchanged baseline worker setting. Full YAML semantic comparison found only the two allowed leaves changed: OS worker environment and OS job admission ceiling. Actual-base code health reports zero blocking/advisory findings; changed Python Ruff and diff checks pass. Home/live-system guards stayed enabled; no packages were installed.
+
+Independent coordinator verification matched the exact workflow/policy-test hashes and reran the same full-source private-fixture policy suite: seven tests passed in 6.12 seconds. This remains source/policy evidence; hosted native acceptance is pending.
