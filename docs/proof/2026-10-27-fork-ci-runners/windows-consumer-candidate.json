@@ -66,6 +66,109 @@
     "tests/hermes_cli/test_git_trampoline_windows_live.py": "88831260686f49ec5921a9403b13e53982ec43de91718adac7c6b3bcb44e93fa",
     "tests/scripts/desktop_update/test_desktop_update_windows_marker_lock.py": "f48b04cb95b456be13153d68bf043810f6b1fafdfaa9b96fa24aae9c5c9b81e7",
     "hermes_cli/update_cmd_git.py": "200ea2096b9671d096403f462ee911a8d052128d4b64a38cc4885c1fccd912c0",
-    "tests/hermes_cli/test_cmd_update.py": "aa597a08bf15873f204972fd5b1fe7e42edad1ce5d7c2e8aec04b62eae096300"
+    "tests/hermes_cli/test_cmd_update.py": "aa597a08bf15873f204972fd5b1fe7e42edad1ce5d7c2e8aec04b62eae096300",
+    "tests/hermes_cli/test_local_runtime_processes.py": "0feac7699f4c83234d3e7555e993b71ffe511599375405c05bb8643ace0638da"
+  },
+  "suspended_state_observation": {
+    "source_equivalent_to_combined_head": "94959087c8a6f4d2bb062e36fb13ca268f3c53db",
+    "ci_observation": "Windows x64 assign fixture immediate psutil status was running, while resume sibling and other six cases passed. This does not prove execution or a status race.",
+    "candidate": "Fixture-only existing _wait on same STATUS_STOPPED requirement, maximum2s; unconditional no-marker, real kernel/job limits, noninheritance, kill/wait and handle/stream guards preserved. Production containment unchanged.",
+    "native_probe": {
+      "python": "3.14.9",
+      "psutil": "7.2.2",
+      "resumed": false,
+      "trials": [
+        {
+          "trial": 0,
+          "pid": 55300,
+          "statuses": [
+            {
+              "status": "stopped",
+              "elapsed_seconds": 0.025846799995633774
+            }
+          ],
+          "stopped": true,
+          "marker_absent": true,
+          "child_exited": true,
+          "handle_closed": true,
+          "streams_closed": true
+        },
+        {
+          "trial": 1,
+          "pid": 64320,
+          "statuses": [
+            {
+              "status": "stopped",
+              "elapsed_seconds": 0.05861399999412242
+            }
+          ],
+          "stopped": true,
+          "marker_absent": true,
+          "child_exited": true,
+          "handle_closed": true,
+          "streams_closed": true
+        },
+        {
+          "trial": 2,
+          "pid": 44728,
+          "statuses": [
+            {
+              "status": "stopped",
+              "elapsed_seconds": 0.015652100002625957
+            }
+          ],
+          "stopped": true,
+          "marker_absent": true,
+          "child_exited": true,
+          "handle_closed": true,
+          "streams_closed": true
+        },
+        {
+          "trial": 3,
+          "pid": 45292,
+          "statuses": [
+            {
+              "status": "stopped",
+              "elapsed_seconds": 0.015001500010839663
+            }
+          ],
+          "stopped": true,
+          "marker_absent": true,
+          "child_exited": true,
+          "handle_closed": true,
+          "streams_closed": true
+        },
+        {
+          "trial": 4,
+          "pid": 60600,
+          "statuses": [
+            {
+              "status": "stopped",
+              "elapsed_seconds": 0.026538599995546974
+            }
+          ],
+          "stopped": true,
+          "marker_absent": true,
+          "child_exited": true,
+          "handle_closed": true,
+          "streams_closed": true
+        }
+      ],
+      "owner_handles_before": 168,
+      "owner_handles_after": 171
+    },
+    "native_environment": {
+      "python": "3.14.9",
+      "executable_exists": true,
+      "psutil": "7.2.2",
+      "psutil_file": "C:\\Users\\austi\\AppData\\Local\\hermes\\installs\\5ba46b7bb98197ea\\environments\\76a2e0bacfd94c2fad8e1106c67a061b\\venv\\Lib\\site-packages\\psutil\\__init__.py",
+      "module_under_selected_environment": true
+    },
+    "native_probe_sha256": "f627da188680b097aa15934074bde8414592c9406336b146b52e8dcc1a1ddacd",
+    "native_environment_sha256": "992e55616c7f600ea319cd273c44a4321bbb42ae55f9354ccc6720319ba211cd",
+    "race_reproduced": false,
+    "handle_boundary": "All five owned Popen handles/streams explicitly closed. Owner handle count168\u2192171 recorded; not claimed as a proven zero-leak process-wide metric.",
+    "first_probe_draft": "Unexported subprocess.CREATE_SUSPENDED attribute failed before child creation; corrected to maintained production0x4 value.",
+    "native_ci_acceptance": "pending; no repeat native children or production activation"
   }
 }
