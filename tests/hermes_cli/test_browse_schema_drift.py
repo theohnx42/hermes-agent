@@ -605,6 +605,42 @@ def test_slow_browse_reconcile_gives_up_inside_its_budget_and_boot_waits_it_out(
     assert "last_read_at" not in _session_columns(path)
 
 
+def test_budget_interrupt_during_begin_is_retryable_without_changing_store(tmp_path, monkeypatch):
+    """The SQLite VM can interrupt BEGIN itself, before any additive DDL has run."""
+    import hermes_state_reconcile as reconcile
+    import hermes_cli.sqlite_safe_read as safe_read
+
+    path = _lagging_store_with_history(_profile_home(tmp_path), rows=2)
+    before = _file_state(path)
+    budget = reconcile._Budget(3.0)
+    original = safe_read.connect_tracked
+
+    class InterruptBegin:
+        def __init__(self, conn):
+            self.conn = conn
+            self.statement = ""
+            conn.set_trace_callback(lambda sql: setattr(self, "statement", sql.strip().upper()))
+
+        def __getattr__(self, name):
+            return getattr(self.conn, name)
+
+        def set_progress_handler(self, handler, operations):
+            def progress():
+                if self.statement == "BEGIN IMMEDIATE":
+                    budget.expired = True
+                    return 1
+                return handler()
+            self.conn.set_progress_handler(progress, 1)
+
+    monkeypatch.setattr(safe_read, "connect_tracked",
+                        lambda *args, **kwargs: InterruptBegin(original(*args, **kwargs)))
+    with pytest.raises(reconcile.BrowseBudgetExceeded):
+        reconcile._apply_additive_schema(path, budget)
+    assert budget.expired
+    assert _file_state(path) == before
+    assert "last_read_at" not in _session_columns(path)
+
+
 def test_equal_cardinality_corrupt_index_plus_drift_is_not_written(tmp_path):
     """R2-3: quick_check does not compare index keys with the table, so two equal-size indexes
     with swapped root pages pass it. Browse must still refuse as corrupt and write nothing."""

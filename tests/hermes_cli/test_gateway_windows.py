@@ -878,10 +878,29 @@ def test_task_user_prefers_token_identity_over_ssh_workgroup(monkeypatch):
     calls = []
     def run(argv, **kwargs):
         calls.append((argv, kwargs))
-        return SimpleNamespace(returncode=0, stdout="NIGHTFALL\\alice\n")
+        return SimpleNamespace(returncode=0, stdout=b"NIGHTFALL\\alice\n")
     monkeypatch.setattr(gateway_windows.subprocess, "run", run)
     assert gateway_windows._resolve_task_user() == "NIGHTFALL\\alice"
-    assert calls == [(["whoami"], dict(capture_output=True, text=True, timeout=5, check=False))]
+    assert calls == [(["whoami"], dict(capture_output=True, timeout=5, check=False))]
+
+
+@pytest.mark.parametrize("codec, identity", [("cp936", "NIGHTFALL\\方舟"), ("cp850", "DOMÄIN\\jörg")])
+def test_task_user_reuses_native_console_decoder(monkeypatch, codec, identity):
+    from types import SimpleNamespace
+    monkeypatch.setattr(gateway_windows, "_windows_console_encodings", lambda: [codec])
+    monkeypatch.setattr(gateway_windows.subprocess, "run", lambda *a, **kw: SimpleNamespace(
+        returncode=0, stdout=(identity + "\n").encode(codec)))
+    assert gateway_windows._resolve_task_user() == identity
+
+
+def test_task_user_does_not_promote_lossy_identity(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setenv("USERDOMAIN", "NIGHTFALL")
+    monkeypatch.setenv("USERNAME", "alice")
+    monkeypatch.setattr(gateway_windows, "_windows_console_encodings", lambda: ["ascii"])
+    monkeypatch.setattr(gateway_windows.subprocess, "run", lambda *a, **kw: SimpleNamespace(
+        returncode=0, stdout=b"NIGHTFALL\\\xff\n"))
+    assert gateway_windows._resolve_task_user() == "NIGHTFALL\\alice"
 
 
 def test_task_user_falls_back_when_token_lookup_times_out(monkeypatch):
