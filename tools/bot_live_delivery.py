@@ -57,7 +57,10 @@ def _bot_chat_tip(home: Path) -> str | None:
         receipt = local_receipt(db, owner)
         entry = receipt.get('entry')
         current = entry.get('session_id') if isinstance(entry, dict) else None
-        lineage = receipt.get('lineage')
+        # A fresh LOCAL creation has one segment and no explicit lineage yet.
+        # Reset/compression receipts add the field; an explicit malformed value
+        # must still fail closed rather than taking this absent-field default.
+        lineage = receipt.get('lineage', [owner])
         if (receipt.get('session_id') != owner or not isinstance(current, str)
                 or not isinstance(lineage, list) or current not in lineage
                 or not db.get_session(current)):
