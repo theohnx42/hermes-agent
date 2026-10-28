@@ -1,10 +1,7 @@
-import fs from 'node:fs'
-
-import ts from 'typescript'
 import { describe, expect, it, vi } from 'vitest'
 
 import { resolveProfileBackendRoute } from './connection-config'
-import { resolveLocalProfileOwner } from './local-gateway-owner-routing'
+import { createLocalProfileBackendRouting, resolveLocalProfileOwner } from './local-gateway-owner-routing'
 
 function connection(profile: string, owner: string, port: number, epoch = 1) {
   const home = profile === 'default' ? '/private/hermes' : `/private/hermes/profiles/${profile}`
@@ -26,41 +23,28 @@ function connection(profile: string, owner: string, port: number, epoch = 1) {
   }
 }
 
-// Execute the actual Electron orchestration bodies with owned process boundaries stubbed.
-// Native discovery is the existing pool's dial, never a second gateway-run implementation.
 function harness(primaryProfile: string, primary: ReturnType<typeof connection>, target: ReturnType<typeof connection>) {
-  const text = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
-  const file = ts.createSourceFile('main.ts', text, ts.ScriptTarget.Latest, true)
-
-  const bodies = file.statements.filter((node): node is ts.FunctionDeclaration =>
-    ts.isFunctionDeclaration(node) && ['ensureBackend', 'ensurePooledBackend', 'forgetLocalGatewayDescriptor'].includes(node.name?.text || '')
-  ).map(node => node.getText(file)).join('\n')
-
   const backendPool = new Map()
   const dial = vi.fn(async () => target)
+  const state = { clearPromiseForAttempt: vi.fn() }
 
-  const dependencies = {
-    primaryProfileKey: () => primaryProfile,
-    profileDeletionGate: { assertCanStart: vi.fn() },
-    profileRouteOptions: () => ({ primaryProfile }),
-    resolveProfileBackendRoute,
-    startHermes: vi.fn(async () => primary),
-    setWslBridgeProfileState: vi.fn(),
-    resolveLocalProfileOwner,
-    backendPool,
-    rememberLog: vi.fn(),
-    backendConnectionState: { startAttempt: vi.fn(() => ({})), getPromise: vi.fn(), clearPromiseForAttempt: vi.fn() },
+  const routing = createLocalProfileBackendRouting({
+    primaryProfile: () => primaryProfile,
+    routeOptions: () => ({ primaryProfile }),
+    assertCanStart: vi.fn(),
+    startPrimary: vi.fn(async () => primary),
+    pool: backendPool,
+    newEntry: () => ({ connectionPromise: null }),
+    dialProfile: dial,
     assertNotPassiveSpawn: (passive: boolean) => { if (passive) { throw new Error('passive spawn forbidden') } },
-    newPoolEntry: () => ({}),
-    dialPoolBackend: dial,
-    logPoolSpawnFailure: vi.fn(),
-    forgetFailedPoolEntry: vi.fn()
-  }
+    recordLocal: vi.fn(),
+    forgetFailedEntry: vi.fn(),
+    logFailure: vi.fn(),
+    log: vi.fn(),
+    invalidatePrimary: state.clearPromiseForAttempt
+  })
 
-  const javascript = ts.transpileModule(bodies, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
-  const functions = new Function(...Object.keys(dependencies), `${javascript};return {ensureBackend,forgetLocalGatewayDescriptor}`)(...Object.values(dependencies))
-
-  return { ensure: functions.ensureBackend, forget: functions.forgetLocalGatewayDescriptor, dial, backendPool, state: dependencies.backendConnectionState }
+  return { ensure: routing.ensure, forget: routing.forget, dial, backendPool, state }
 }
 
 describe('native profile owner routing', () => {
@@ -128,6 +112,24 @@ describe('native profile owner routing', () => {
     expect(attachProfile).not.toHaveBeenCalled()
     expect(resolveProfileBackendRoute('codex', { primaryProfile: 'condor', profileRemoteOverride: true }).backend).toBe('pool')
     expect(resolveProfileBackendRoute('codex', { primaryProfile: 'condor', isolatedBackend: true }).backend).toBe('pool')
+  })
+
+  it('keeps passive discovery fail-closed until an existing pool descriptor is cached', async () => {
+    const primary = connection('condor', 'standalone', 31001)
+    const target = connection('codex', 'multiplexer', 31002)
+    const { ensure, dial } = harness('condor', primary, target)
+    await expect(ensure('codex', { passive: true })).rejects.toThrow('passive spawn forbidden')
+    expect(dial).not.toHaveBeenCalled()
+    await ensure('codex')
+    expect(await ensure('codex', { passive: true })).toMatchObject({ baseUrl: target.baseUrl })
+    expect(dial).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps remote primary routing on its existing connection without a local dial', async () => {
+    const remote = { ...connection('condor', 'remote', 31001), mode: 'remote' }
+    const { ensure, dial } = harness('condor', remote, connection('codex', 'multiplexer', 31002))
+    expect(await ensure('codex')).toMatchObject({ mode: 'remote', baseUrl: remote.baseUrl })
+    expect(dial).not.toHaveBeenCalled()
   })
 
   it('propagates discovery failure rather than minting against the wrong owner', async () => {

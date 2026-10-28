@@ -3,7 +3,7 @@ import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
 import { requireExistingRuntime } from './existing-runtime'
 import type { GatewayEndpoint } from './local-gateway'
 import { configurePythonGatewayTicketClient, createLocalGatewayDials, createStaleGatewayRestarter, ensureLocalGateway, gatewayOwnerProfile, localGatewayDial, nativeGatewayHttpHeaders, redialLocalGateway, runGatewayEnsure, runGatewayOwnerRestart } from './local-gateway'
-import { resolveLocalProfileOwner } from './local-gateway-owner-routing'
+import { createLocalProfileBackendRouting } from './local-gateway-owner-routing'
 import { closeGatewayTicketBridges, createGatewayTicketResolver } from './local-gateway-python'
 import { createPluginWsUrlHandler } from './plugin-ws-url'
 const localGatewayDials = createLocalGatewayDials()
@@ -172,7 +172,6 @@ import {
   type RegistryBackendRequestScope,
   resolveAuthMode,
   resolveProfileApiRequest,
-  resolveProfileBackendRoute,
   resolveRemoteSshDashboardProfile,
   resolveTestWsUrl,
   sanitizeRemoteHeaderValue,
@@ -10559,35 +10558,28 @@ function profileRouteOptions(
 // so the next ensureBackend() re-runs `gateway ensure` (attach or start) instead
 // of minting tickets against a dead control socket. Nothing is killed: the
 // descriptor never owned the runtime.
-async function forgetLocalGatewayDescriptor(profile, request?: { method?: string; path?: string }) {
-  const key = profile && String(profile).trim() ? String(profile).trim() : primaryProfileKey()
-  // Resolve the route the failed call used (B2-15): an unscopable mutation's stale entry is pooled.
-  const routeOpts = profileRouteOptions(key, request)
-  const route = resolveProfileBackendRoute(key, routeOpts)
-  const pooled = backendPool.get(key)
-
-  if (route.backend === 'primary' && pooled?.separateNativeOwner
-      && !routeOpts.globalRemote && !routeOpts.primaryRemoteActive && !routeOpts.profileRemoteOverride) {
-    backendPool.delete(key)
-    rememberLog(`[gateway] forgot stale separate native owner for profile "${key}"; re-ensuring`)
-
-    return
-  }
-
-  if (route.backend === 'primary') {
-    // Same-owner discovery is pooled too: discard its stale descriptor alongside the primary.
-    backendPool.delete(key)
+const localProfileBackends = createLocalProfileBackendRouting({
+  primaryProfile: primaryProfileKey,
+  routeOptions: profileRouteOptions,
+  assertCanStart: key => profileDeletionGate.assertCanStart(key),
+  startPrimary: startHermes,
+  pool: backendPool,
+  newEntry: newPoolEntry,
+  dialProfile: dialPoolBackend,
+  assertNotPassiveSpawn,
+  recordLocal: setWslBridgeProfileState,
+  forgetFailedEntry: forgetFailedPoolEntry,
+  logFailure: logPoolSpawnFailure,
+  log: rememberLog,
+  invalidatePrimary: () => {
     const attempt = backendConnectionState.startAttempt()
     attempt.promise = backendConnectionState.getPromise()
     backendConnectionState.clearPromiseForAttempt(attempt)
-    rememberLog(`[gateway] forgot stale canonical endpoint for primary "${key}"; re-ensuring`)
-
-    return
   }
+})
 
-  if (backendPool.delete(key)) {
-    rememberLog(`[gateway] forgot stale canonical endpoint for profile "${key}"; re-ensuring`)
-  }
+async function forgetLocalGatewayDescriptor(profile, request?: { method?: string; path?: string }) {
+  return localProfileBackends.forget(profile, request)
 }
 
 // Registry twin of forgetLocalGatewayDescriptor: a 'local' registry connection
@@ -10615,81 +10607,7 @@ async function ensureBackend(
   profile,
   opts: { passive?: boolean; request?: { method?: string; path?: string } } = {}
 ) {
-  const key = profile && String(profile).trim() ? String(profile).trim() : primaryProfileKey()
-  const passive = Boolean(opts.passive)
-
-  profileDeletionGate.assertCanStart(key)
-
-  // The REQUEST is part of the routing decision (case 5/6): resolving without
-  // it would collapse a profile onto the shared backend that the caller's
-  // resolveProfileApiRequest deliberately kept pooled, and the unscopable
-  // destructive write would execute against the primary's home after all.
-  const routeOpts = profileRouteOptions(key, opts.request)
-  const route = resolveProfileBackendRoute(key, routeOpts)
-
-  if (route.backend === 'primary') {
-    const connection = await startHermes(key)
-    setWslBridgeProfileState(key, connection.mode !== 'remote')
-
-    const ownerConnection = await resolveLocalProfileOwner({
-      connection,
-      profile: key,
-      primaryProfile: primaryProfileKey(),
-      attachProfile: () => ensurePooledBackend(key, passive)
-    })
-
-    const pooled = backendPool.get(key)
-
-    if (pooled) {
-      pooled.separateNativeOwner = ownerConnection !== connection
-    }
-
-    if (ownerConnection !== connection) {
-      return ownerConnection
-    }
-
-    // A shared backend still owes the caller its profile scope, so renderer-side
-    // WebSocket, filesystem, and cache routing target the selected profile.
-    // `sharedPrimary` marks this as the shared-primary route: pooled backends
-    // also carry `profile`, so only this descriptor gets the flag. The
-    // unshared primary carries its own key too: a profile-less descriptor
-    // reads as "default" downstream, which breaks per-source profile memory
-    // (the primary IS "default" only when it actually booted as default).
-    return route.descriptorProfile
-      ? { ...connection, profile: route.descriptorProfile, sharedPrimary: true }
-      : { ...connection, profile: key }
-  }
-
-  return ensurePooledBackend(key, passive)
-}
-
-async function ensurePooledBackend(key, passive) {
-  const existing = backendPool.get(key)
-
-  if (existing) {
-    const connection = await existing.connectionPromise
-    setWslBridgeProfileState(key, connection.mode !== 'remote')
-
-    return connection
-  }
-
-  assertNotPassiveSpawn(passive, key)
-  const entry = newPoolEntry()
-
-  entry.connectionPromise = dialPoolBackend(key, entry).catch(error => {
-    // Land the failure in desktop.log: without this a dial that fails before
-    // the gateway answers (guard rejection, runtime resolution) leaves no trace
-    // beyond renderer-side rejections users never see in a bundle.
-    logPoolSpawnFailure(`"${key}"`, error)
-    forgetFailedPoolEntry(key, entry)
-    throw error
-  })
-  backendPool.set(key, entry)
-
-  const connection = await entry.connectionPromise
-  setWslBridgeProfileState(key, connection.mode !== 'remote')
-
-  return connection
+  return localProfileBackends.ensure(profile, opts)
 }
 
 // ── Registry-scoped backends (multi-connection, PR 2 of the campaign) ──────
