@@ -3,6 +3,7 @@ import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
 import { requireExistingRuntime } from './existing-runtime'
 import type { GatewayEndpoint } from './local-gateway'
 import { configurePythonGatewayTicketClient, createLocalGatewayDials, createStaleGatewayRestarter, ensureLocalGateway, gatewayOwnerProfile, localGatewayDial, nativeGatewayHttpHeaders, redialLocalGateway, runGatewayEnsure, runGatewayOwnerRestart } from './local-gateway'
+import { resolveLocalProfileOwner } from './local-gateway-owner-routing'
 import { closeGatewayTicketBridges, createGatewayTicketResolver } from './local-gateway-python'
 import { createPluginWsUrlHandler } from './plugin-ws-url'
 const localGatewayDials = createLocalGatewayDials()
@@ -10561,9 +10562,21 @@ function profileRouteOptions(
 async function forgetLocalGatewayDescriptor(profile, request?: { method?: string; path?: string }) {
   const key = profile && String(profile).trim() ? String(profile).trim() : primaryProfileKey()
   // Resolve the route the failed call used (B2-15): an unscopable mutation's stale entry is pooled.
-  const route = resolveProfileBackendRoute(key, profileRouteOptions(key, request))
+  const routeOpts = profileRouteOptions(key, request)
+  const route = resolveProfileBackendRoute(key, routeOpts)
+  const pooled = backendPool.get(key)
+
+  if (route.backend === 'primary' && pooled?.separateNativeOwner
+      && !routeOpts.globalRemote && !routeOpts.primaryRemoteActive && !routeOpts.profileRemoteOverride) {
+    backendPool.delete(key)
+    rememberLog(`[gateway] forgot stale separate native owner for profile "${key}"; re-ensuring`)
+
+    return
+  }
 
   if (route.backend === 'primary') {
+    // Same-owner discovery is pooled too: discard its stale descriptor alongside the primary.
+    backendPool.delete(key)
     const attempt = backendConnectionState.startAttempt()
     attempt.promise = backendConnectionState.getPromise()
     backendConnectionState.clearPromiseForAttempt(attempt)
@@ -10618,6 +10631,23 @@ async function ensureBackend(
     const connection = await startHermes(key)
     setWslBridgeProfileState(key, connection.mode !== 'remote')
 
+    const ownerConnection = await resolveLocalProfileOwner({
+      connection,
+      profile: key,
+      primaryProfile: primaryProfileKey(),
+      attachProfile: () => ensurePooledBackend(key, passive)
+    })
+
+    const pooled = backendPool.get(key)
+
+    if (pooled) {
+      pooled.separateNativeOwner = ownerConnection !== connection
+    }
+
+    if (ownerConnection !== connection) {
+      return ownerConnection
+    }
+
     // A shared backend still owes the caller its profile scope, so renderer-side
     // WebSocket, filesystem, and cache routing target the selected profile.
     // `sharedPrimary` marks this as the shared-primary route: pooled backends
@@ -10630,6 +10660,10 @@ async function ensureBackend(
       : { ...connection, profile: key }
   }
 
+  return ensurePooledBackend(key, passive)
+}
+
+async function ensurePooledBackend(key, passive) {
   const existing = backendPool.get(key)
 
   if (existing) {
