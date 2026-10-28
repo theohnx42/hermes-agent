@@ -450,12 +450,18 @@ def _conv_path(context_id: str) -> Path:
     return get_hermes_home() / "a2a_conversations" / f"{safe}.jsonl"
 
 
-def persist_message(context_id: str, role: str, text: str, task_id: str = "", input_id: str = "") -> None:
+def persist_message(context_id: str, role: str, text: str, task_id: str = "", input_id: str = "", *,
+                    rpc_request_id: str = "", remote_task_id: str = "") -> None:
     """Append one message to the context's on-disk conversation log. Never raises."""
     try:
         path = _conv_path(context_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         entry = {"ts": time.time(), "role": role, "text": text, "task_id": task_id, **({"input_id": input_id} if input_id else {})}
+        # Preserve legacy fields/callers; explicit IDs prevent treating an RPC ID as a Task ID.
+        if rpc_request_id:
+            entry["rpc_request_id"] = rpc_request_id
+        if remote_task_id:
+            entry["remote_task_id"] = remote_task_id
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception:
