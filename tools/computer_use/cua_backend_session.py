@@ -442,7 +442,7 @@ class _CuaDriverSession:
     @staticmethod
     def _rebind_refused(name: str) -> dict[str, Any]:
         message = ("cua-driver rejected the public session in the replacement transport; "
-                   "Hermes did not run this operation. Use a fresh computer-use context and "
+                   "Hermes did not dispatch this operation after that rejection. Use a fresh computer-use context and "
                    "take fresh state; do not replay an earlier unknown-outcome action.")
         return _tool_envelope(message, [], {"ok": False, "code": "session_rebind_refused",
                                             "message": message, "operation": name,
