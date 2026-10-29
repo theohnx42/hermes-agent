@@ -184,6 +184,7 @@ class _CuaDriverSession:
     # call_tool. Class-level default: tests that bypass __init__ see healthy.
     # See #74799.
     _timeout_suspect = False
+    _session_rebind_failed = False
 
     def __init__(self, bridge: _AsyncBridge, embedded_daemon: Optional[Any] = None) -> None:
         self._bridge, self._embedded_daemon, self._session = bridge, embedded_daemon, None
@@ -411,7 +412,7 @@ class _CuaDriverSession:
         return result.get("isError") is not True
 
     def _recreate_session(self, name: str, timeout: float, log_msg: str, *, restart: bool = True,
-                          clear_timeout_suspect: bool = False) -> None:
+                          clear_timeout_suspect: bool = False) -> bool:
         """Log *log_msg* (``%s`` = *name*), then either start() a dead session or (``restart``) tear
         down and rebuild the MCP lifecycle under ``_lock`` with capabilities repopulated from scratch;
         finally re-attach the declared public label inside the replacement private lifecycle."""
@@ -429,10 +430,23 @@ class _CuaDriverSession:
                 self._capabilities, self._tool_schemas, self._capability_version = {}, {}, ""
                 self._start_lifecycle_locked()
                 self._started = True
-            if clear_timeout_suspect:
-                self._timeout_suspect = False
         if getattr(self, "_declared_session_id", None):
-            self._redeclare_session(timeout, "cua-driver public session label %s could not be restored: %s")
+            if not self._redeclare_session(timeout, "cua-driver public session label %s could not be restored: %s"):
+                self._session_rebind_failed = self._timeout_suspect = True
+                self._notify_transport_reset()
+                return False
+        if clear_timeout_suspect:
+            self._timeout_suspect = False
+        return True
+
+    @staticmethod
+    def _rebind_refused(name: str) -> dict[str, Any]:
+        message = ("cua-driver rejected the public session in the replacement transport; "
+                   "Hermes did not run this operation. Use a fresh computer-use context and "
+                   "take fresh state; do not replay an earlier unknown-outcome action.")
+        return _tool_envelope(message, [], {"ok": False, "code": "session_rebind_refused",
+                                            "message": message, "operation": name,
+                                            "next_step": "fresh_context"}, True, [])
 
     def _call_tool_via_cli(self, name: str, args: dict[str, Any], timeout: float) -> dict[str, Any]:
         """Fallback transport: ``cua-driver call <tool> <json>`` subprocess. The MCP stdio bridge can persistently
@@ -467,16 +481,20 @@ class _CuaDriverSession:
 
     def call_tool(self, name: str, args: dict[str, Any], timeout: float = 30.0) -> dict[str, Any]:
         if name not in self._LIFECYCLE_CALLS:
+            if self._session_rebind_failed:
+                return self._rebind_refused(name)
             # A prior MCP timeout marks the session suspect (possibly wedged): recreate it so one timeout never
             # poisons the run. Healthy sessions are never restarted here.
             if self._timeout_suspect:
-                self._recreate_session(
+                if not self._recreate_session(
                     name, timeout, "cua-driver session suspect after earlier MCP timeout; recreating before %s",
-                    clear_timeout_suspect=True)
+                    clear_timeout_suspect=True):
+                    return self._rebind_refused(name)
             # A prior session may have died (MCP drop / driver crash) and reset _started.
             if not self._started:
-                self._recreate_session(
-                    name, timeout, "cua-driver session not active on %s; (re)starting before call", restart=False)
+                if not self._recreate_session(
+                    name, timeout, "cua-driver session not active on %s; (re)starting before call", restart=False):
+                    return self._rebind_refused(name)
         if not self._started:
             raise RuntimeError("cua-driver session not started")
         try:
@@ -500,14 +518,19 @@ class _CuaDriverSession:
                 return self._call_tool_via_cli(name, args, timeout)
             if not self._is_closed_session_error(e):
                 raise
-            self._recreate_session(name, timeout, "cua-driver MCP session closed during %s; reconnecting once")
+            rebound = self._recreate_session(name, timeout, "cua-driver MCP session closed during %s; reconnecting once")
             if name not in self._TRANSPORT_REPLAY_SAFE_TOOLS:
                 return _outcome_unknown(name, e, "transport_outcome_unknown")
+            if not rebound:
+                return self._rebind_refused(name)
             result = self._bridge.run(self._call_tool_async(name, args), timeout=timeout)
         # Remember only a SUCCESSFULLY declared identity: no stale recovery state.
         declared_id, ok = args.get("session"), result.get("isError") is not True
         if name == "start_session" and ok and isinstance(declared_id, str) and declared_id:
             self._declared_session_id = declared_id
+            if self._session_rebind_failed:
+                self._notify_transport_reset()
+            self._session_rebind_failed = self._timeout_suspect = False
         if _is_ended_session_result(result):
             # Revive the stable session and replay the rejected call once; a 2nd rejection surfaces as-is.
             # Never re-runs lifecycle calls -> an end_session result is final.
