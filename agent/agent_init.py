@@ -1189,7 +1189,7 @@ def _init_session_state(agent, session_id, session_db, parent_session_id, reason
     _publish_session_id(agent.session_id)
 
     # ~/.hermes/sessions/ — kept unconditionally for request_dump_*.json debug breadcrumbs.
-    agent.logs_dir = get_hermes_home() / "sessions"
+    agent.logs_dir = (getattr(agent, "_profile_home", None) or get_hermes_home()) / "sessions"
     agent.logs_dir.mkdir(parents=True, exist_ok=True)
     _set_defaults(agent, _SESSION_STATE)
 
@@ -2359,6 +2359,7 @@ def init_agent(
     _set_defaults(agent, _STREAM_STATE)
     _build_client(agent, api_key, base_url, fallback_model)
     _init_fallback_chain(agent, fallback_model)
+    agent._profile_home = get_hermes_home()
     _load_tools(agent, enabled_toolsets, disabled_toolsets)
     _init_session_state(
         agent, session_id, session_db, parent_session_id, reasoning_config, max_tokens,
