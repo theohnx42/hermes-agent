@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -152,33 +153,94 @@ def test_nonzero_exit_after_the_commit_point_is_installed_with_a_followup(tmp_pa
         assert (result['ok'], result['exit_code']) == (False, 130), result
 
 
-_TIMED_CHECKOUT_HOLDER = """
+_CHECKOUT_HOLDER = """
 import msvcrt, os, sys, time
+from pathlib import Path
 fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT | os.O_BINARY, 0o644)
-os.lseek(fd, 1 << 20, os.SEEK_SET)
-msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)   # hermes_cli/update_lock.py::_try_lock's byte
-time.sleep(float(sys.argv[2]))
+# offset 1 MiB: exactly hermes_cli/update_lock.py::_try_lock; 1 MiB + 1..16: one R5b lease byte
+os.lseek(fd, (1 << 20) + (int(sys.argv[3]) if len(sys.argv) > 3 else 0), os.SEEK_SET)
+msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+Path(sys.argv[2] + '.ready').write_text('1', encoding='utf-8')
+while not Path(sys.argv[2]).exists():
+    time.sleep(0.05)
 """
 
 
 @pytest.mark.platforms('windows')
 def test_result_finished_at_is_stamped_after_the_r6_release_wait(tmp_path: Path) -> None:
-    # The relaunched Desktop drops a non-manual result whose finished_at is 30 minutes old; the
-    # R6 wait lasts up to 2 h. The result must carry the time the hand-off actually finished.
-    holders = []
+    # Synchronize with the real release wait; startup time is not lock ownership.
+    holders, observers, observed, errors = [], [], {}, []
+    release = tmp_path / 'release-holder'
+    stopping = threading.Event()
 
-    def hold_checkout(_home: Path, install: Path) -> None:
-        holders.append((subprocess.Popen([sys.executable, '-c', _TIMED_CHECKOUT_HOLDER,
-                                          str(install / '.hermes-update.lock'), '25']), time.time() + 25))
+    def hold_checkout(home: Path, install: Path) -> None:
+        holder = subprocess.Popen([sys.executable, '-c', _CHECKOUT_HOLDER,
+                                   str(install / '.hermes-update.lock'), str(release)])
+        holders.append(holder)
+        deadline = time.monotonic() + 30
+        while not Path(str(release) + '.ready').exists():
+            assert time.monotonic() < deadline and holder.poll() is None, 'checkout holder not ready'
+            time.sleep(0.05)
+
+        def observe_release_wait() -> None:
+            try:
+                deadline = time.monotonic() + 120
+                log_path = home / 'logs/desktop-update-handoff.log'
+                result_path = home / '.hermes-update-result.json'
+                while not stopping.is_set():
+                    assert time.monotonic() < deadline, 'release wait/initial result not observed'
+                    assert holder.poll() is None, 'checkout holder exited before release'
+                    try:
+                        log = log_path.read_text(encoding='utf-8-sig')
+                    except (FileNotFoundError, PermissionError):
+                        log = ''
+                    try:
+                        initial = json.loads(result_path.read_text(encoding='utf-8-sig'))
+                    except (FileNotFoundError, PermissionError, json.JSONDecodeError):
+                        initial = None
+                    if ('keeping the update marker' in log and isinstance(initial, dict)
+                            and initial.get('ok') is True and type(initial.get('finished_at')) is int):
+                        assert (home / '.hermes-update-in-progress').exists(), 'marker missing during wait'
+                        observed['initial_finished_at'] = initial['finished_at']
+                        # Unix-second result precision requires a distinct release second.
+                        while time.time() < initial['finished_at'] + 1:
+                            assert time.monotonic() < deadline and not stopping.is_set(), 'release clock boundary unavailable'
+                            assert holder.poll() is None, 'checkout holder exited at clock boundary'
+                            time.sleep(0.01)
+                        observed['release_epoch'] = int(time.time())
+                        release.touch()
+                        return
+                    time.sleep(0.05)
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                # A failed observation must not strand the fixture handoff for two hours.
+                release.touch()
+
+        observer = threading.Thread(target=observe_release_wait, daemon=True)
+        observers.append(observer)
+        observer.start()
+
     try:
         code, out, _, result, home = _handoff(tmp_path, '-NoGateway', prepare=hold_checkout)
     finally:
-        for proc, _ in holders:
-            proc.kill(); proc.wait()
+        stopping.set()
+        release.touch()
+        for observer in observers:
+            observer.join(timeout=5)
+        for holder in holders:
+            if holder.poll() is None:
+                holder.kill()
+            holder.wait(timeout=10)
+    assert all(not observer.is_alive() for observer in observers), 'fixture observer did not stop'
+    assert not errors, errors
+    assert 'release_epoch' in observed, 'real release wait was not observed'
     assert code == 0, out
     log = (home / 'logs/desktop-update-handoff.log').read_text(encoding='utf-8-sig')
     assert 'keeping the update marker' in log, log
-    assert result['ok'] is True and result['finished_at'] >= int(holders[0][1]) - 1, result
+    assert result['ok'] is True, result
+    assert result['finished_at'] > observed['initial_finished_at'], (result, observed)
+    assert result['finished_at'] >= observed['release_epoch'], (result, observed)
 
 
 @pytest.mark.platforms('windows')
