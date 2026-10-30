@@ -692,7 +692,8 @@ def _timeout_phase_tail(path: Path, expected: os.stat_result, root: Path) -> str
         parent = parent.parent
     flags = (os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NOFOLLOW', 0)
              | getattr(os, 'O_NONBLOCK', 0))
-    with os.fdopen(os.open(path, flags), 'rb') as handle:
+    fd = os.open(path, flags)
+    with os.fdopen(fd, 'rb') as handle:
         current = os.fstat(handle.fileno())
         if (not stat.S_ISREG(current.st_mode) or current.st_nlink != 1
                 or (current.st_dev, current.st_ino) != (expected.st_dev, expected.st_ino)):
