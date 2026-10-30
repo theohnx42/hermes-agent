@@ -13,7 +13,6 @@ from tests.ci import _gha_expr as gha
 ROOT = Path(__file__).resolve().parents[2]
 UPSTREAM = 'NousResearch/hermes-agent'
 FORK = 'theohnx42/hermes-agent'
-MANUAL_E2E = {'e2e-desktop.yml', 'e2e-desktop-core.yml', 'e2e-desktop-update.yml'}
 NATIVE = {'ubuntu-24.04', 'windows-2025', 'windows-11-arm', 'macos-15'}
 
 
@@ -32,14 +31,13 @@ def test_pr_graph_has_available_native_runners():
     checked = 0
     while pending:
         name = pending.pop()
-        if name in seen or name in MANUAL_E2E:
+        if name in seen:
             continue
         seen.add(name)
         for job_id, job in workflow(name)['jobs'].items():
-            if job_id.startswith('e2e') or job_id == 'install-update-e2e':
-                continue
-            # Existing E2E jobs remain release/manual-only, not part of PR admission.
-            if job.get('if') is False or re.fullmatch(r'inputs\.e2e(?:_upgrade)?', str(job.get('if', ''))):
+            # Only a literal disabled caller is unreachable; classified E2E lanes
+            # and nested reusable workflows are part of the actual CI graph.
+            if job.get('if') is False:
                 continue
             uses = job.get('uses', '')
             if uses.startswith('./.github/workflows/'):
@@ -59,6 +57,47 @@ def test_pr_graph_has_available_native_runners():
             assert all(r in NATIVE or r == 'ubuntu-latest' for r in runners), (name, runners)
             checked += len(runners)
     assert checked >= 40
+
+
+def test_enabled_e2e_call_graph_covers_all_nine_queued_jobs():
+    """Replay enabled classifier outputs through callers, including the nested Windows job."""
+    outputs = dict.fromkeys(('python', 'desktop_updater', 'e2e', 'e2e_upgrade',
+                             'e2e_desktop_core', 'e2e_desktop_update'), 'true')
+    leaves = [('tests', 'e2e', 'blacksmith-32vcpu-ubuntu-2404'),
+              ('tests', 'e2e-upgrade-plan', 'blacksmith-4vcpu-ubuntu-2404'),
+              ('tests-os', 'e2e-windows', 'blacksmith-32vcpu-windows-2025'),
+              ('tests-os', 'install-update-e2e', 'blacksmith-32vcpu-windows-2025'),
+              ('e2e-desktop-core', 'core', 'blacksmith-32vcpu-ubuntu-2404'),
+              ('e2e-desktop-update', 'update', 'blacksmith-32vcpu-ubuntu-2404')]
+    for repository in (UPSTREAM, FORK):
+        count = 0
+        for caller_id, child_id, upstream_runner in leaves:
+            ctx = context(repository, needs={'detect': {'outputs': outputs}}, inputs={})
+            caller = workflow('ci.yaml')['jobs'][caller_id]
+            assert gha.evaluate(caller['if'], ctx), caller_id
+            inputs = {key: gha.render(value, ctx) for key, value in caller['with'].items()}
+            child = workflow(caller['uses'].rsplit('/', 1)[1])['jobs'][child_id]
+            child_ctx = context(repository, inputs=inputs)
+            if 'if' in child:
+                assert gha.evaluate(child['if'], child_ctx), child_id
+            if 'uses' in child:
+                nested_inputs = {key: gha.render(value, child_ctx)
+                                 for key, value in child.get('with', {}).items()}
+                jobs = workflow(child['uses'].rsplit('/', 1)[1])['jobs']
+                assert len(jobs) == 1
+                child = next(iter(jobs.values()))
+                child_ctx = context(repository, inputs=nested_inputs)
+            expected = upstream_runner if repository == UPSTREAM else (
+                'windows-2025' if 'windows' in upstream_runner else 'ubuntu-24.04')
+            assert gha.render(child['runs-on'], child_ctx) == expected, (caller_id, child_id)
+            count += len(child.get('strategy', {}).get('matrix', {}).get('include', [{}]))
+        assert count == 9
+        # The planner's currently blocked upgrade shards must also have an available
+        # runner when its real output supplies the dynamic shard matrix.
+        upgrade = workflow('tests.yml')['jobs']['e2e-upgrade']
+        assert upgrade['needs'] == 'e2e-upgrade-plan'
+        expected = 'blacksmith-32vcpu-ubuntu-2404' if repository == UPSTREAM else 'ubuntu-24.04'
+        assert gha.render(upgrade['runs-on'], context(repository)) == expected
 
 
 @pytest.mark.parametrize('repository,count,workers', [(UPSTREAM, 2, 32), (FORK, 16, 4)])

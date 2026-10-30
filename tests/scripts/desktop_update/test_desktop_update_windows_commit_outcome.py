@@ -19,6 +19,7 @@ import time
 import pytest
 
 from tests.installation_launcher_fixture import publish_fixture_launcher
+from tests.waiting import wait_until
 
 ROOT = Path(__file__).resolve().parent.parent.parent.parent
 SCRIPT = ROOT / 'scripts/desktop-update/windows.ps1'
@@ -203,10 +204,13 @@ def test_result_finished_at_is_stamped_after_the_r6_release_wait(tmp_path: Path)
                         assert (home / '.hermes-update-in-progress').exists(), 'marker missing during wait'
                         observed['initial_finished_at'] = initial['finished_at']
                         # Unix-second result precision requires a distinct release second.
-                        while time.time() < initial['finished_at'] + 1:
+                        def release_clock_boundary_reached() -> bool:
                             assert time.monotonic() < deadline and not stopping.is_set(), 'release clock boundary unavailable'
                             assert holder.poll() is None, 'checkout holder exited at clock boundary'
-                            time.sleep(0.01)
+                            return time.time() >= initial['finished_at'] + 1
+
+                        wait_until(release_clock_boundary_reached, timeout=max(0, deadline - time.monotonic()),
+                                   what='release clock boundary unavailable')
                         observed['release_epoch'] = int(time.time())
                         release.touch()
                         return
