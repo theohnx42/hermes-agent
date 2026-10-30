@@ -694,3 +694,295 @@ def test_slices_partition_the_suite_exactly_even_with_different_duration_caches(
     slices = [rtp._slice_files(list(reversed(files)) if i % 2 else files, i % 3 + 1, 3, caches[i % 3], root)
               for i in range(3)]
     assert sorted(f for s in slices for f in s) == sorted(files)
+
+
+def _timeout_phase_runner():
+    import importlib.util
+
+    source = Path(__file__).resolve().parents[2] / 'scripts/run_tests_parallel.py'
+    spec = importlib.util.spec_from_file_location('runner_timeout_phase_probe', source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _phase_file(root, name='case', text='2026-10-30T13:24:29-04:00 hand-off start: private argv\n'):
+    path = root / name / 'home/logs/desktop-update-handoff.log'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding='utf-8')
+    return path
+
+
+def _eligible_phase_test(root):
+    return root / 'tests/scripts/desktop_update/test_desktop_update_windows_probe.py'
+
+
+def test_timeout_phase_projection_is_bounded_and_does_not_echo_raw_details(tmp_path):
+    runner = _timeout_phase_runner()
+    logs = tmp_path / 'owned'
+    for index in range(9):
+        _phase_file(logs, str(index), 'x' * 5000 + '\n2026-10-30T13:24:29-04:00 update| raw-private-output\n'
+                    '2026-10-30T13:24:30-04:00 running: python secret-argument\n')
+    result = runner._desktop_timeout_phase_output(_eligible_phase_test(tmp_path), tmp_path, str(logs))
+    assert result.count('update-running') == 8
+    assert 'raw-private-output' not in result and 'secret-argument' not in result
+    assert 'truncated' in result and len(result.encode('utf-8')) <= 32768
+
+
+def test_timeout_phase_walk_caps_entries_and_depth(tmp_path):
+    runner = _timeout_phase_runner()
+    logs = tmp_path / 'owned'
+    logs.mkdir()
+    for index in range(1025):
+        (logs / f'entry-{index}').touch()
+    assert 'truncated' in runner._desktop_timeout_phase_output(_eligible_phase_test(tmp_path), tmp_path, str(logs))
+    deep = tmp_path / 'deep'
+    _phase_file(deep, '/'.join(['level'] * 9))
+    result = runner._desktop_timeout_phase_output(_eligible_phase_test(tmp_path), tmp_path, str(deep))
+    assert 'truncated' in result and 'handoff-start' not in result
+
+
+@pytest.mark.platforms('posix')
+def test_timeout_phase_reader_refuses_symlinks_hardlinks_and_outside_paths(tmp_path):
+    runner = _timeout_phase_runner()
+    outside = _phase_file(tmp_path / 'outside', text='2038-01-01T00:00:00Z hand-off start: outside\n')
+    logs = tmp_path / 'owned'
+    logs.mkdir()
+    (logs / 'linked-directory').symlink_to(outside.parent.parent, target_is_directory=True)
+    linked = logs / 'linked/home/logs'
+    linked.mkdir(parents=True)
+    (linked / outside.name).symlink_to(outside)
+    hard = logs / 'hard/home/logs'
+    hard.mkdir(parents=True)
+    os.link(outside, hard / outside.name)
+    result = runner._desktop_timeout_phase_output(_eligible_phase_test(tmp_path), tmp_path, str(logs))
+    assert '2038' not in result
+    with pytest.raises(OSError, match='outside'):
+        runner._timeout_phase_tail(outside, outside.stat(), logs)
+    with pytest.raises(OSError, match='outside'):
+        runner._timeout_phase_tail(logs / '..' / 'outside/case/home/logs' / outside.name, outside.stat(), logs)
+
+
+def test_timeout_phase_unrelated_file_does_not_inspect_logs(tmp_path, monkeypatch):
+    runner = _timeout_phase_runner()
+    def forbidden(*_args):
+        raise AssertionError('an unrelated file must not inspect phase logs')
+    monkeypatch.setattr(runner, '_timeout_phase_candidates', forbidden)
+    assert runner._desktop_timeout_phase_output(tmp_path / 'tests/other.py', tmp_path, str(tmp_path)) == ''
+
+
+def test_timeout_phase_missing_and_unreadable_logs_are_explicit(tmp_path, monkeypatch):
+    runner = _timeout_phase_runner()
+    logs = tmp_path / 'owned'
+    logs.mkdir()
+    assert 'no eligible phase log' in runner._desktop_timeout_phase_output(_eligible_phase_test(tmp_path), tmp_path, str(logs))
+    _phase_file(logs)
+    def unreadable(*_args):
+        raise PermissionError('fixture-only unreadable log')
+    monkeypatch.setattr(runner, '_timeout_phase_tail', unreadable)
+    result = runner._desktop_timeout_phase_output(_eligible_phase_test(tmp_path), tmp_path, str(logs))
+    assert 'unreadable' in result and 'handoff-start' not in result
+
+
+@pytest.mark.platforms('posix')
+@pytest.mark.live_system_guard_bypass
+def test_real_file_timeout_keeps_phase_evidence_and_removes_own_temp_root(tmp_path):
+    runner = _timeout_phase_runner()
+    root = _probe_root(tmp_path)
+    file = _eligible_phase_test(root)
+    file.parent.mkdir(parents=True)
+    receipt = tmp_path / 'owned-child.json'
+    file.write_text(
+        'import json,os,threading\nfrom pathlib import Path\n'
+        'def test_wait_for_parent_cleanup():\n'
+        '    root=Path(os.environ["PYTEST_DEBUG_TEMPROOT"])\n'
+        '    log=root/"case/home/logs/desktop-update-handoff.log"\n'
+        '    log.parent.mkdir(parents=True)\n'
+        '    log.write_text("2026-10-30T13:24:29Z hand-off start: private-argument\\n",encoding="utf-8")\n'
+        f'    Path({str(receipt)!r}).write_text(json.dumps({{"root":str(root),"pid":os.getpid()}}),encoding="utf-8")\n'
+        '    threading.Event().wait()\n', encoding='utf-8')
+    _, code, output, _, _ = runner._run_one_file_once(file, ['-q'], root, 3)
+    assert code == 124 and '2026-10-30T13:24:29Z handoff-start' in output
+    assert 'private-argument' not in output
+    state = json.loads(receipt.read_text(encoding='utf-8'))
+    assert not Path(state['root']).exists()
+    assert not _pid_alive(state['pid'])
+
+
+def test_timeout_collector_error_still_cleans_up_and_preserves_rc(tmp_path, monkeypatch, caplog, capsys):
+    runner = _timeout_phase_runner()
+    roots = []
+    class TimedOutProcess:
+        pid = 123456789
+        def communicate(self, timeout):
+            if not roots:
+                raise AssertionError('temp root was not created')
+            if not hasattr(self, 'timed_out'):
+                self.timed_out = True
+                raise subprocess.TimeoutExpired('fixture', timeout)
+            return 'original pytest output', None
+    def start(_cmd, **kwargs):
+        roots.append(Path(kwargs['env']['PYTEST_DEBUG_TEMPROOT']))
+        return TimedOutProcess()
+    def broken(*_args):
+        raise RuntimeError('private-secret-marker')
+    monkeypatch.setattr(runner.subprocess, 'Popen', start)
+    monkeypatch.setattr(runner, '_kill_tree', lambda *_args, **_kw: None)
+    monkeypatch.setattr(runner, '_kill_detached_leftovers', lambda *_args: None)
+    monkeypatch.setattr(runner, '_desktop_timeout_phase_output', broken)
+    _, code, output, _, _ = runner._run_one_file_once(_eligible_phase_test(tmp_path), [], tmp_path, 3)
+    assert code == 124 and 'original pytest output' in output and 'unavailable' in output
+    captured = capsys.readouterr()
+    assert 'private-secret-marker' not in output + caplog.text + captured.out + captured.err
+    assert not roots[0].exists()
+
+
+def test_non_timeout_exception_keeps_original_error_and_cleans_up(tmp_path, monkeypatch):
+    runner = _timeout_phase_runner()
+    roots = []
+    class InterruptedProcess:
+        pid = 123456789
+        def communicate(self, timeout):
+            raise KeyboardInterrupt('fixture interruption')
+    def start(_cmd, **kwargs):
+        roots.append(Path(kwargs['env']['PYTEST_DEBUG_TEMPROOT']))
+        return InterruptedProcess()
+    def forbidden(*_args):
+        raise AssertionError('no timeout: do not collect logs')
+    monkeypatch.setattr(runner.subprocess, 'Popen', start)
+    monkeypatch.setattr(runner, '_kill_tree', lambda *_args, **_kw: None)
+    monkeypatch.setattr(runner, '_kill_detached_leftovers', lambda *_args: None)
+    monkeypatch.setattr(runner, '_desktop_timeout_phase_output', forbidden)
+    with pytest.raises(KeyboardInterrupt, match='fixture interruption'):
+        runner._run_one_file_once(_eligible_phase_test(tmp_path), [], tmp_path, 3)
+    assert not roots[0].exists()
+
+
+
+def test_timeout_phase_selection_keeps_the_latest_case(tmp_path):
+    import hashlib
+
+    runner = _timeout_phase_runner()
+    logs = tmp_path / 'owned'
+    for index in range(9):
+        path = _phase_file(logs, f'old-{index}')
+        os.utime(path, ns=((1000 + index) * 10**9, (1000 + index) * 10**9))
+    current = _phase_file(logs, 'current-case')
+    os.utime(current, ns=(9000 * 10**9, 9000 * 10**9))
+    result = runner._desktop_timeout_phase_output(_eligible_phase_test(tmp_path), tmp_path, str(logs))
+    current_hash = hashlib.sha256(current.relative_to(logs).as_posix().encode()).hexdigest()[:12]
+    old_hash = hashlib.sha256(b'old-0/home/logs/desktop-update-handoff.log').hexdigest()[:12]
+    assert current_hash in result and old_hash not in result
+    assert 'current-case' not in result and 'old-0' not in result
+    assert result.count('handoff-start') == 8 and 'truncated' in result
+
+
+def test_timeout_phase_reader_rejects_reparse_metadata_and_changed_identity(tmp_path):
+    import stat
+    from types import SimpleNamespace
+
+    runner = _timeout_phase_runner()
+    metadata = SimpleNamespace(st_dev=1, st_mode=stat.S_IFDIR, st_file_attributes=0x400)
+    with pytest.raises(OSError, match='reparse'):
+        runner._timeout_log_stat(SimpleNamespace(lstat=lambda: metadata), 1)
+    logs = tmp_path / 'owned'
+    path = _phase_file(logs)
+    original = path.stat()
+    replacement = _phase_file(logs, 'replacement')
+    path.rename(path.with_suffix('.retained'))
+    os.replace(replacement, path)
+    with pytest.raises(OSError, match='identity changed'):
+        runner._timeout_phase_tail(path, original, logs)
+
+
+@pytest.mark.platforms('posix')
+def test_timeout_phase_fifo_is_never_opened(tmp_path, monkeypatch):
+    runner = _timeout_phase_runner()
+    logs = tmp_path / 'owned'
+    fifo = logs / 'home/logs/desktop-update-handoff.log'
+    fifo.parent.mkdir(parents=True)
+    os.mkfifo(fifo)
+    original_open = runner.os.open
+    def guarded_open(path, *args, **kwargs):
+        assert Path(path) != fifo, 'FIFO must be rejected before open'
+        return original_open(path, *args, **kwargs)
+    monkeypatch.setattr(runner.os, 'open', guarded_open)
+    result = runner._desktop_timeout_phase_output(_eligible_phase_test(tmp_path), tmp_path, str(logs))
+    assert 'no eligible phase log' in result
+
+
+def test_timeout_phase_projection_keeps_the_initial_powershell_utf8_bom_phase(tmp_path):
+    runner = _timeout_phase_runner()
+    logs = tmp_path / 'owned'
+    _phase_file(logs, text='\ufeff2026-10-30T13:24:29-04:00 claimed update marker private-suffix\n')
+    result = runner._desktop_timeout_phase_output(_eligible_phase_test(tmp_path), tmp_path, str(logs))
+    assert '2026-10-30T13:24:29-04:00 marker-claimed' in result
+    assert 'private-suffix' not in result
+
+
+@pytest.mark.platforms('posix')
+def test_timeout_phase_regular_to_fifo_swap_cannot_block_before_identity_check(tmp_path, monkeypatch):
+    import stat
+
+    runner = _timeout_phase_runner()
+    logs = tmp_path / 'owned'
+    path = _phase_file(logs)
+    before = path.stat()
+    original_open = runner.os.open
+    def swapped_open(name, flags):
+        assert flags & os.O_NONBLOCK, 'diagnostics must not wait for a FIFO writer'
+        path.rename(path.with_suffix('.retained'))
+        os.mkfifo(path)
+        return original_open(name, flags)
+    monkeypatch.setattr(runner.os, 'open', swapped_open)
+    with pytest.raises(OSError, match='identity changed'):
+        runner._timeout_phase_tail(path, before, logs)
+    assert stat.S_ISFIFO(path.lstat().st_mode)
+
+
+def test_successful_file_never_collects_timeout_phases(tmp_path, monkeypatch):
+    runner = _timeout_phase_runner()
+    roots = []
+    class SuccessfulProcess:
+        pid = 123456789
+        returncode = 0
+        def communicate(self, timeout):
+            return 'original successful pytest output', None
+    def start(_cmd, **kwargs):
+        roots.append(Path(kwargs['env']['PYTEST_DEBUG_TEMPROOT']))
+        return SuccessfulProcess()
+    def forbidden(*_args):
+        raise AssertionError('successful files must not inspect logs')
+    monkeypatch.setattr(runner.subprocess, 'Popen', start)
+    monkeypatch.setattr(runner, '_kill_tree', lambda *_args, **_kw: None)
+    monkeypatch.setattr(runner, '_kill_detached_leftovers', lambda *_args: None)
+    monkeypatch.setattr(runner, '_desktop_timeout_phase_output', forbidden)
+    _, code, output, _, _ = runner._run_one_file_once(_eligible_phase_test(tmp_path), [], tmp_path, 3)
+    assert code == 0 and output == 'original successful pytest output\n'
+    assert not roots[0].exists()
+
+
+
+def test_timeout_phase_tail_drops_a_partial_line_that_mimics_a_phase(tmp_path):
+    runner = _timeout_phase_runner()
+    logs = tmp_path / 'owned'
+    path = _phase_file(logs)
+    false_phase = b'2038-01-01T00:00:00Z hand-off start: raw argument fragment\n'
+    real_phase = b'2026-10-30T13:24:29Z hermes update exit code: private-detail\n'
+    filler = b'x' * (4096 - len(false_phase) - len(real_phase) - 1) + b'\n'
+    # The bounded tail starts at a timestamp, but the original line does not.
+    path.write_bytes(b'raw output prefix' * 400 + false_phase + filler + real_phase)
+    result = runner._desktop_timeout_phase_output(_eligible_phase_test(tmp_path), tmp_path, str(logs))
+    assert '2038' not in result and 'raw argument' not in result and 'private-detail' not in result
+    assert '2026-10-30T13:24:29Z update-exited' in result
+
+
+
+@pytest.mark.platforms('posix')
+def test_timeout_phase_labels_do_not_echo_private_folder_or_control_characters(tmp_path):
+    runner = _timeout_phase_runner()
+    logs = tmp_path / 'owned'
+    _phase_file(logs, 'private-secret-folder\n\x1b[31m')
+    result = runner._desktop_timeout_phase_output(_eligible_phase_test(tmp_path), tmp_path, str(logs))
+    assert 'handoff-start' in result and 'phase-log 1; path-sha256=' in result
+    assert 'private-secret-folder' not in result and '\x1b' not in result
