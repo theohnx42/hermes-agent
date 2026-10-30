@@ -56,27 +56,34 @@ def graph(tmp_path, request):
     return checkout, common, target, judged, current_head, merge_base
 
 
-def run_step(tmp_path, graph, invalid=None, event='pull_request'):
-    checkout, common, target, judged, current_head, merge_base = graph
+def case_metadata(graph, invalid):
+    _, common, target, judged, current_head, merge_base = graph
     pr = {'base': {'repo': {'full_name': 'fixture/repo'}, 'sha': common, 'ref': 'target'},
           'head': {'sha': current_head}}
     comparison = {'base_commit': {'sha': target}, 'merge_base_commit': {'sha': merge_base},
                   'status': 'ahead' if merge_base == target else 'diverged'}
-    event_repo, event_sha = 'fixture/repo', target
-    if invalid == 'foreign_base':
-        event_repo = 'other/repo'
-    elif invalid == 'missing_event_base':
-        event_sha = ''
-    elif invalid == 'invalid_event_sha':
-        event_sha = '--all'
-    elif invalid == 'missing_merge_base':
-        comparison.pop('merge_base_commit')
-    elif invalid == 'invalid_sha':
-        comparison['merge_base_commit']['sha'] = '--all'
-    elif invalid == 'wrong_compare_base':
-        comparison['base_commit']['sha'] = judged
+    event_base = {'repo': 'fixture/repo', 'sha': target}
+    removed = object()
+    mutations = {
+        'foreign_base': (event_base, 'repo', 'other/repo'),
+        'missing_event_base': (event_base, 'sha', ''),
+        'invalid_event_sha': (event_base, 'sha', '--all'),
+        'missing_merge_base': (comparison, 'merge_base_commit', removed),
+        'invalid_sha': (comparison['merge_base_commit'], 'sha', '--all'),
+        'wrong_compare_base': (comparison['base_commit'], 'sha', judged),
+    }
+    if invalid is not None:
+        mapping, key, value = mutations[invalid]
+        if value is removed:
+            mapping.pop(key)
+        else:
+            mapping[key] = value
     responses = {'repos/fixture/repo/pulls/7': pr,
                  f'repos/fixture/repo/compare/{target}...{judged}': comparison}
+    return responses, event_base
+
+
+def install_fake_api(tmp_path, responses):
     response_path = tmp_path / 'responses.json'
     response_path.write_text(json.dumps(responses), encoding='utf-8')
     calls = tmp_path / 'api-calls.jsonl'
@@ -89,6 +96,10 @@ def run_step(tmp_path, graph, invalid=None, event='pull_request'):
                   "assert sys.argv[1]=='api'\nprint(json.dumps(responses[sys.argv[2]]))\n",
                   encoding='utf-8')
     gh.chmod(0o755)
+    return fake_bin, response_path, calls
+
+
+def workflow_base_step():
     workflow = yaml.safe_load((ROOT / '.github/workflows/lint.yml').read_text(encoding='utf-8'))
     job = workflow['jobs']['lint-diff']
     checkout_step = next(step for step in job['steps'] if step.get('name') == 'Checkout code')
@@ -96,9 +107,17 @@ def run_step(tmp_path, graph, invalid=None, event='pull_request'):
     assert checkout_step['with']['fetch-depth'] == 2
     assert job['timeout-minutes'] == 10
     step = next(step for step in job['steps'] if step.get('id') == 'base')
+    return step
+
+
+def run_step(tmp_path, graph, invalid=None, event='pull_request'):
+    checkout, _, _, _, current_head, _ = graph
+    responses, event_base = case_metadata(graph, invalid)
+    fake_bin, response_path, calls = install_fake_api(tmp_path, responses)
+    step = workflow_base_step()
     ctx = {'github': {'repository': 'fixture/repo', 'token': 'fixture-token',
-                      'event': {'pull_request': {'base': {'repo': {'full_name': event_repo},
-                                                        'sha': event_sha, 'ref': 'target'},
+                      'event': {'pull_request': {'base': {'repo': {'full_name': event_base['repo']},
+                                                        'sha': event_base['sha'], 'ref': 'target'},
                                                  'head': {'sha': current_head}}}},
            'inputs': {'event_name': event}}
     event_values = {key: gha.render(value, ctx) for key, value in step['env'].items()}
