@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { resolveProfileBackendRoute } from './connection-config'
-import { createLocalProfileBackendRouting, resolveLocalProfileOwner, type ProfileBackendRequest } from './local-gateway-owner-routing'
+import { createLocalProfileBackendRouting, type ProfileBackendRequest, resolveLocalProfileOwner } from './local-gateway-owner-routing'
 
 function connection(profile: string, owner: string, port: number, epoch = 1) {
   const home = profile === 'default' ? '/private/hermes' : `/private/hermes/profiles/${profile}`
@@ -27,11 +27,13 @@ function harness(primaryProfile: string, primary: ReturnType<typeof connection>,
   const backendPool = new Map()
   const dial = vi.fn(async () => target)
   const startPrimary = vi.fn(async () => primary)
+
   const routeOptions = vi.fn((_profile: string, request?: ProfileBackendRequest) => ({
     primaryProfile,
     requestMethod: request?.method,
     requestPath: request?.path
   }))
+
   const state = { clearPromiseForAttempt: vi.fn() }
 
   const routing = createLocalProfileBackendRouting({
