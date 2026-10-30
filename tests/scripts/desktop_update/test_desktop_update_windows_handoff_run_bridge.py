@@ -5,7 +5,7 @@ import subprocess
 import time
 import pytest
 from tests.scripts.desktop_update.windows_handoff_support import MARKER, _creation_time, _script, _finish
-from tests.scripts.desktop_update.test_desktop_update_windows_handoff_lineage import sleeper
+from tests.scripts.desktop_update.test_desktop_update_windows_handoff_lineage import sleeper as sleeper
 
 
 @pytest.mark.platforms('windows')
