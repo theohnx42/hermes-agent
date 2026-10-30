@@ -43,6 +43,27 @@ def get_hermes_home_override() -> str | None:
     return str(override) if override is not _UNSET and override else None
 
 
+def get_agent_hermes_home(agent) -> Path | None:
+    """Logical profile identity, independent of the session DB's physical storage.
+
+    A bound turn can multiplex profiles over a shared DB. Otherwise retain the
+    home captured at construction, including when a worker loses its ContextVars.
+    Older agents captured the same identity in their sessions log directory.
+    """
+    if override := get_hermes_home_override():
+        return Path(override)
+    home = getattr(agent, "_profile_home", None)
+    if isinstance(home, (str, Path)) and str(home):
+        return Path(home)
+    logs = getattr(agent, "logs_dir", None)
+    if isinstance(logs, (str, Path)):
+        logs = Path(logs)
+        if logs.is_absolute() and logs.name == "sessions":
+            return logs.parent
+    db_path = getattr(getattr(agent, "_session_db", None), "db_path", None)
+    return Path(db_path).parent if isinstance(db_path, (str, Path)) and str(db_path) else None
+
+
 def _expand_hermes_home(path: str) -> Path:
     """Expand environment and user-home syntax in a Hermes home path."""
     return Path(os.path.expanduser(os.path.expandvars(path)))
