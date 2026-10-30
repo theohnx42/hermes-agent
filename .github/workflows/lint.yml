@@ -46,7 +46,7 @@ jobs:
         uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a  # v1
         with:
           ref: ${{ inputs.commit }}
-          fetch-depth: 0 # need full history for merge-base + worktree
+          fetch-depth: 2 # judged ref plus parent; fetch only the exact merge base below
 
       - uses: ./.github/actions/setup-pm
         with:
@@ -60,20 +60,60 @@ jobs:
 
       - name: Determine base ref
         id: base
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ inputs.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
-          # For PRs, diff against the merge base with the target branch.
-          # For pushes to main, diff against the previous commit on main.
-          if [ "${{ inputs.event_name }}" = "pull_request" ]; then
-            BASE_SHA=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
-            BASE_REF="origin/${{ github.base_ref }}"
-          else
-            BASE_SHA=$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)
-            BASE_REF="HEAD~1"
-          fi
-          echo "sha=${BASE_SHA}" >> "$GITHUB_OUTPUT"
-          echo "ref=${BASE_REF}" >> "$GITHUB_OUTPUT"
-          echo "Base SHA: ${BASE_SHA}"
-          echo "Base ref: ${BASE_REF}"
+          python3 - <<'PYBASE'
+          import json, os, re, subprocess
+
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True, timeout=60).strip()
+
+          def api(path):
+              return json.loads(subprocess.check_output(['gh', 'api', path], text=True, timeout=30))
+
+          def sha(value):
+              if not isinstance(value, str) or not re.fullmatch(r'[0-9a-f]{40}', value):
+                  raise ValueError('invalid base-resolution commit identity')
+              return value
+
+          repo = os.environ['REPO']
+          if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo):
+              raise ValueError('invalid repository identity')
+          # inputs.commit may judge a different ref from the PR's head. Use
+          # the actual checkout with the trusted event base, not REST PR snapshots.
+          head = sha(git('rev-parse', 'HEAD'))
+          if os.environ['EVENT_NAME'] == 'pull_request':
+              if os.environ.get('PR_BASE_REPO') != repo:
+                  raise ValueError('PR event base belongs to another repository')
+              target = sha(os.environ.get('PR_BASE_SHA'))
+              label = os.environ.get('PR_BASE_REF')
+              if not isinstance(label, str) or not label or '\n' in label or '\r' in label:
+                  raise ValueError('invalid PR event base label')
+              comparison = api(f'repos/{repo}/compare/{target}...{head}')
+              if (comparison['base_commit']['sha'] != target
+                      or comparison['status'] not in ('identical', 'ahead', 'behind', 'diverged')):
+                  raise ValueError('compare response does not match the requested base')
+              merge_base = sha(comparison['merge_base_commit']['sha'])
+              git('fetch', '--no-tags', '--depth=1', 'origin', merge_base)
+              if git('rev-parse', 'FETCH_HEAD^{commit}') != merge_base:
+                  raise ValueError('fetched base differs from the compare result')
+              label += ' (merge base)'
+          else:
+              # Preserve the previous-commit fallback for non-PR callers.
+              try:
+                  merge_base = sha(git('rev-parse', 'HEAD~1'))
+              except subprocess.CalledProcessError:
+                  merge_base = head
+              label = 'HEAD~1'
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f'sha={merge_base}\nref={label}\n')
+          PYBASE
 
       # Reports live under $RUNNER_TEMP, not the checkout: the clean-worktree step at the end of
       # every job fails (or warns) on untracked files, and .lint-reports/ is not gitignored.
