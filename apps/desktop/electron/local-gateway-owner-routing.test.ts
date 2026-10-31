@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { resolveProfileBackendRoute } from './connection-config'
-import { createLocalProfileBackendRouting, resolveLocalProfileOwner } from './local-gateway-owner-routing'
+import { createLocalProfileBackendRouting, type ProfileBackendRequest, resolveLocalProfileOwner } from './local-gateway-owner-routing'
 
 function connection(profile: string, owner: string, port: number, epoch = 1) {
   const home = profile === 'default' ? '/private/hermes' : `/private/hermes/profiles/${profile}`
@@ -26,13 +26,21 @@ function connection(profile: string, owner: string, port: number, epoch = 1) {
 function harness(primaryProfile: string, primary: ReturnType<typeof connection>, target: ReturnType<typeof connection>) {
   const backendPool = new Map()
   const dial = vi.fn(async () => target)
+  const startPrimary = vi.fn(async () => primary)
+
+  const routeOptions = vi.fn((_profile: string, request?: ProfileBackendRequest) => ({
+    primaryProfile,
+    requestMethod: request?.method,
+    requestPath: request?.path
+  }))
+
   const state = { clearPromiseForAttempt: vi.fn() }
 
   const routing = createLocalProfileBackendRouting({
     primaryProfile: () => primaryProfile,
-    routeOptions: () => ({ primaryProfile }),
+    routeOptions,
     assertCanStart: vi.fn(),
-    startPrimary: vi.fn(async () => primary),
+    startPrimary,
     pool: backendPool,
     newEntry: () => ({ connectionPromise: null }),
     dialProfile: dial,
@@ -44,10 +52,34 @@ function harness(primaryProfile: string, primary: ReturnType<typeof connection>,
     invalidatePrimary: state.clearPromiseForAttempt
   })
 
-  return { ensure: routing.ensure, forget: routing.forget, dial, backendPool, state }
+  return { ensure: routing.ensure, forget: routing.forget, dial, backendPool, state, startPrimary, routeOptions }
 }
 
 describe('native profile owner routing', () => {
+  it('keeps an unscopable REST mutation on its profile pool when a failed request redials', async () => {
+    const primary = connection('default', 'multiplexer', 31001)
+    const target = connection('work', 'multiplexer', 31001)
+    const { ensure, forget, dial, backendPool, state, startPrimary, routeOptions } = harness('default', primary, target)
+    const request = { method: 'POST', path: '/api/not-a-real-route/destroy' }
+
+    // Even the same authority cannot scope this write through the shared primary descriptor.
+    expect(await ensure('work', { request })).toBe(target)
+    expect(startPrimary).not.toHaveBeenCalled()
+
+    // The REST failure seam forgets and re-ensures with the original request, not a read route.
+    await forget('work', request)
+    expect(backendPool.has('work')).toBe(false)
+    expect(state.clearPromiseForAttempt).not.toHaveBeenCalled()
+    const replacement = connection('work', 'replacement', 31002, 2)
+    dial.mockResolvedValueOnce(replacement)
+    expect(await ensure('work', { request })).toBe(replacement)
+    expect(startPrimary).not.toHaveBeenCalled()
+    expect(dial).toHaveBeenCalledTimes(2)
+    expect(routeOptions.mock.calls).toEqual([
+      ['work', request], ['work', request], ['work', request]
+    ])
+  })
+
   it.each([
     ['condor', 'codex', 'standalone', 'multiplexer'],
     ['default', 'condor', 'multiplexer', 'standalone']

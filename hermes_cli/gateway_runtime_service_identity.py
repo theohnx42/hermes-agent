@@ -313,7 +313,8 @@ def _vbs_identity(script: str) -> tuple[str, list[str]]:
     lines = script.splitlines()
     if len(lines) < 16 or not lines[0].startswith("' "):
         _unverified()
-    fixed = ["Option Explicit", "Dim sh, env, existing_pp",
+    modern = lines[2] == "Dim sh, env, existing_pp, exitCode"
+    fixed = ["Option Explicit", "Dim sh, env, existing_pp, exitCode" if modern else "Dim sh, env, existing_pp",
              'Set sh = CreateObject("WScript.Shell")', 'Set env = sh.Environment("PROCESS")']
     if lines[1:5] != fixed:
         _unverified()
@@ -328,13 +329,17 @@ def _vbs_identity(script: str) -> tuple[str, list[str]]:
         env[match[1]] = match[2][1:-1].replace('""', '"')
         index += 1
     tail = lines[index:]
-    if len(tail) != 8 or tail[:2] != ['existing_pp = env.Item("PYTHONPATH")', 'If Len(existing_pp) > 0 Then'] or tail[3] != 'Else' or tail[5] != 'End If':
+    if len(tail) != (9 if modern else 8) or tail[:2] != ['existing_pp = env.Item("PYTHONPATH")', 'If Len(existing_pp) > 0 Then'] or tail[3] != 'Else' or tail[5] != 'End If':
         _unverified()
     if not re.fullmatch(r'  env.Item\("PYTHONPATH"\) = ' + literal + r' & existing_pp', tail[2]) or not re.fullmatch(r'  env.Item\("PYTHONPATH"\) = ' + literal, tail[4]):
         _unverified()
     if not re.fullmatch(r'sh.CurrentDirectory = ' + literal, tail[6]):
         _unverified()
-    run = re.fullmatch(r'sh.Run (' + literal + r'), 0, False', tail[7])
+    if modern and tail[8] != 'WScript.Quit exitCode':
+        _unverified()
+    run_pattern = (r'exitCode = sh.Run\((' + literal + r'), 0, True\)' if modern
+                   else r'sh.Run (' + literal + r'), 0, False')
+    run = re.fullmatch(run_pattern, tail[7])
     if not run or not env.get("HERMES_SUPERVISED_CHILD"):
         _unverified()
     command = run[1][1:-1].replace('""', '"')

@@ -1,3 +1,4 @@
+import { FocusScope } from '@radix-ui/react-focus-scope'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { atom } from 'nanostores'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -236,8 +237,28 @@ beforeEach(() => {
   ;(window as { hermesDesktop?: unknown }).hermesDesktop = { getAgentRoster, openWindow, probeLocalBackend }
 })
 
-afterEach(() => {
-  cleanup()
+it('finishes Radix unmount autofocus before cleanup returns', async () => {
+  const unmountAutofocus = vi.fn()
+  render(
+    <FocusScope onUnmountAutoFocus={unmountAutofocus}>
+      <button>Focus cleanup witness</button>
+    </FocusScope>
+  )
+  await cleanupFleet()
+  expect(unmountAutofocus).toHaveBeenCalledTimes(1)
+})
+
+async function cleanupFleet() {
+  // Radix dispatches unmount autofocus on the next timer turn. Drain it while
+  // this test's jsdom realm is still alive, before restoring mocks or globals.
+  await act(async () => {
+    cleanup()
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+  })
+}
+
+afterEach(async () => {
+  await cleanupFleet()
   $profileOrder.set([])
   vi.clearAllMocks()
   vi.restoreAllMocks()

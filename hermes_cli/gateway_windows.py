@@ -507,10 +507,12 @@ def _resolve_task_user() -> str | None:
     # account's SID authority. Ask Windows for the current token's identity.
     try:
         result = subprocess.run(
-            ["whoami"], capture_output=True, text=True, timeout=5, check=False
+            ["whoami"], capture_output=True, timeout=5, check=False
         )
-        resolved = (result.stdout or "").strip()
-        if result.returncode == 0 and resolved and "\\" in resolved and "\n" not in resolved and "\r" not in resolved:
+        output = result.stdout or b""
+        resolved = (_decode_schtasks_output(output) if isinstance(output, bytes) else output).strip()
+        if (result.returncode == 0 and resolved and "\\" in resolved
+                and "\n" not in resolved and "\r" not in resolved and "\ufffd" not in resolved):
             return resolved
     except (OSError, subprocess.SubprocessError):
         pass
