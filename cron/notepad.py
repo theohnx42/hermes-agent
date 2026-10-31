@@ -30,7 +30,8 @@ _lock = threading.RLock()
 
 
 def _current_notepad_file() -> Path:
-    return NOTEPAD_FILE or (get_hermes_home().resolve() / "cron" / "notepad.db")
+    from cron.jobs import get_cron_store_home
+    return NOTEPAD_FILE or (get_cron_store_home(get_hermes_home()) / "cron" / "notepad.db")
 
 
 def _connect() -> sqlite3.Connection:
