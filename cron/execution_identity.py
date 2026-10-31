@@ -32,6 +32,9 @@ class CronExecution:
     profile: str
 
 
+_BOOKKEEPING_HOME: ContextVar[Optional[Path]] = ContextVar("hermes_cron_bookkeeping_home", default=None)
+
+
 _CURRENT: ContextVar[Optional[CronExecution]] = ContextVar("hermes_cron_execution", default=None)
 
 
@@ -169,7 +172,7 @@ def child_notepad_store(job_id: str):
         raise ValueError("cron executor identity mismatch")
     _require_child_native_binding(binding, target, store)
     from cron.jobs import use_cron_store
-    with use_cron_store(store):
+    with use_cron_store(store, bookkeeping=True):
         from cron.executions import execution_owner_verified
         if not (store / 'cron' / 'executions.db').is_file() or not execution_owner_verified(binding['execution_id'], job_id):
             raise ValueError("cron store binding no longer owns a verified execution")
@@ -178,25 +181,28 @@ def child_notepad_store(job_id: str):
 
 
 @contextlib.contextmanager
-def use_cron_store(home: str | Path):
+def use_cron_store(home: str | Path, *, bookkeeping: bool = False):
     """Route cron storage to ``home`` without mutating process globals."""
     from cron.jobs import _cron_store_override, _CronStorePaths
     token = _cron_store_override.set(
         _CronStorePaths.for_dir(Path(home).expanduser().resolve() / "cron"))
+    bookkeeping_token = _BOOKKEEPING_HOME.set(Path(home).expanduser().resolve()) if bookkeeping else None
     try:
         yield
     finally:
+        if bookkeeping_token is not None:
+            _BOOKKEEPING_HOME.reset(bookkeeping_token)
         _cron_store_override.reset(token)
 
 
 def get_cron_store_home(fallback_home: Optional[Path] = None) -> Path:
     """Explicit bookkeeping scope wins; otherwise preserve each consumer's current-home seam."""
     from cron.jobs import _cron_store_override, _current_cron_store
+    if fallback_home is not None:
+        return _BOOKKEEPING_HOME.get() or Path(fallback_home).resolve()
     override = _cron_store_override.get()
     if override is not None:
         return override.cron_dir.parent
-    if fallback_home is not None:
-        return Path(fallback_home).resolve()
     return _current_cron_store().cron_dir.parent
 
 

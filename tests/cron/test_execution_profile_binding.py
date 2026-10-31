@@ -92,15 +92,16 @@ def test_real_central_ledger_and_notepad_do_not_follow_executor_home(homes):
     root, ghost = homes
     job = persisted_job(homes)
     eid = live_claim(job)
-    token = set_hermes_home_override(str(ghost))
-    try:
-        assert jobs.get_cron_store_home() == root
-        assert executions.get_execution(eid)['job_id'] == job['id']
-        notepad.set_note(job['id'], 'cursor', 'accepted-head')
-        assert incidents._db_path() == root / 'cron' / 'executions.db'
-        assert jobs.get_cron_output_dir() == root / 'cron' / 'output'
-    finally:
-        reset_hermes_home_override(token)
+    with jobs.use_cron_store(root, bookkeeping=True):
+        token = set_hermes_home_override(str(ghost))
+        try:
+            assert jobs.get_cron_store_home() == root
+            assert executions.get_execution(eid)['job_id'] == job['id']
+            notepad.set_note(job['id'], 'cursor', 'accepted-head')
+            assert incidents._db_path() == root / 'cron' / 'executions.db'
+            assert jobs.get_cron_output_dir() == root / 'cron' / 'output'
+        finally:
+            reset_hermes_home_override(token)
     assert notepad.get_note(job['id'], 'cursor') == 'accepted-head'
     assert not (ghost / 'cron' / 'executions.db').exists()
     assert not (ghost / 'cron' / 'notepad.db').exists()
@@ -162,7 +163,7 @@ def test_concurrent_runtime_home_does_not_cross_store_scopes(homes):
     def run(runtime, store, value):
         token = set_hermes_home_override(str(runtime))
         try:
-            with jobs.use_cron_store(store):
+            with jobs.use_cron_store(store, bookkeeping=True):
                 notepad.set_note('job', 'owner', value)
                 return get_hermes_home(), jobs.get_cron_store_home(), notepad.get_note('job', 'owner')
         finally:
@@ -183,8 +184,9 @@ def test_non_native_execution_identity_cannot_mint_or_forge_store_context(homes,
     root, ghost = homes
     job = persisted_job(homes)
     eid = live_claim(job)
+    record = get_execution(eid)
     home_token = set_hermes_home_override(str(ghost))
-    token = enter_cron_execution(job, eid, get_execution(eid))
+    token = enter_cron_execution(job, eid, record)
     try:
         with pytest.raises(ValueError, match="native cron execution context unavailable"):
             jobs.cron_child_store_binding()
@@ -192,7 +194,7 @@ def test_non_native_execution_identity_cannot_mint_or_forge_store_context(homes,
                   "execution_profile": "ghost", "execution_home": str(ghost),
                   "job_id": job['id'], "execution_id": eid, "session_id": "not-admitted"}
         monkeypatch.setenv('HERMES_CRON_STORE_BINDING', json.dumps(forged))
-        with jobs.use_cron_store(ghost):
+        with jobs.use_cron_store(ghost, bookkeeping=True):
             with pytest.raises(ValueError):
                 with jobs.child_notepad_store(job['id']):
                     pytest.fail('unregistered native identity exposed central notepad')
@@ -328,7 +330,7 @@ def _direct_native_notepad_child(root_db, ghost_db, target, sid, job, eid):
     root, ghost = Path(root_db.db_path).parent, Path(ghost_db.db_path).parent
     native = session_cron.bind_execution(target, sid, job['id'], eid)
     try:
-        with jobs.use_cron_store(root), _profile_runtime_scope(ghost, prepared_secret_scope={}):
+        with jobs.use_cron_store(root, bookkeeping=True), _profile_runtime_scope(ghost, prepared_secret_scope={}):
             token = enter_cron_execution(job, eid, get_execution(eid))
             try:
                 env = build_subprocess_env(strip_launch_profile=True)
@@ -473,7 +475,7 @@ def test_native_ghost_owner_persists_role_turn_and_central_progress(homes, monke
                 from cron.scheduler import _RunDelivery
                 from cron.scheduler_bookkeeping import finish_completed_run
                 from gateway.run import _profile_runtime_scope
-                with _profile_runtime_scope(ghost, prepared_secret_scope={}):
+                with _profile_runtime_scope(ghost, prepared_secret_scope={}), jobs.use_cron_store(root, bookkeeping=True):
                     assert finish_completed_run(_RunDelivery(job, True, None), None, eid)
                     assert executions.get_execution(eid)['status'] == 'completed'
                     assert executions.get_execution(eid)['delivery_outcome'] == 'suppressed'
@@ -554,7 +556,7 @@ async def _started_child_binding(root, ghost, target, ghost_db, job, eid):
     assert row['status'] == 'started'
     native = session_cron.bind_execution(target, receipt['session_id'], job['id'], eid)
     try:
-        with jobs.use_cron_store(root), _profile_runtime_scope(ghost, prepared_secret_scope={}):
+        with jobs.use_cron_store(root, bookkeeping=True), _profile_runtime_scope(ghost, prepared_secret_scope={}):
             token = enter_cron_execution(job, eid, get_execution(eid))
             try:
                 binding = jobs.cron_child_store_binding()
@@ -584,7 +586,7 @@ def test_real_started_child_binding_refuses_stale_native_identity(homes, monkeyp
         eid = live_claim(job)
         binding = asyncio.run(_started_child_binding(root, ghost, target, ghost_db, job, eid))
         monkeypatch.setenv('HERMES_CRON_STORE_BINDING', json.dumps(binding))
-        with _profile_runtime_scope(ghost, prepared_secret_scope={}), jobs.use_cron_store(ghost):
+        with _profile_runtime_scope(ghost, prepared_secret_scope={}), jobs.use_cron_store(ghost, bookkeeping=True):
             with jobs.child_notepad_store(job['id']):
                 notepad.set_note(job['id'], 'cursor', 'accepted')
             if changed == 'runtime_epoch':
@@ -627,3 +629,70 @@ def test_loopback_custom_key_contract_does_not_borrow_openai_key(homes, explicit
             assert correct_fixture_key
     finally:
         reset_multiplex_context(token)
+
+
+def test_unbound_journal_retains_runtime_home_with_distinct_store(homes):
+    from cron import jobs, scheduler_authority
+    root, _ = homes
+    with jobs.use_cron_store(root / 'separate-store'):
+        job = persisted_job(homes, target=None)
+        path = scheduler_authority.journal_path(job['id'], 'unbound-fire')
+        assert path.parent == root / 'cron' / 'admissions'
+        assert path.parent != jobs.get_cron_store_home() / 'cron' / 'admissions'
+
+
+def test_bound_journal_stays_central_after_assignment_removed(homes):
+    from cron import jobs, scheduler_authority
+    root, _ = homes
+    with jobs.use_cron_store(root / 'separate-store'):
+        job = persisted_job(homes)
+        path = scheduler_authority.journal_path(job['id'], 'bound-fire')
+        assert path.parent == jobs.get_cron_store_home() / 'cron' / 'admissions'
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({'params': {'job_id': job['id'], 'request_id': 'bound-fire'}}))
+        jobs.save_jobs([dict(job, execution_profile=None)])
+        assert scheduler_authority.journal_path(job['id'], 'bound-fire') == path
+
+
+def test_bookkeeping_opt_in_is_scoped_and_restores_legacy_paths(homes):
+    from cron import jobs, notepad
+    root, _ = homes
+    central = root / 'central'
+    original = (root / 'cron' / 'executions.db', root / 'cron' / 'notepad.db')
+    with jobs.use_cron_store(central):
+        assert jobs.get_cron_store_home() == central
+        assert jobs.get_cron_store_home(root) == root
+        assert notepad._current_notepad_file() == original[1]
+        with jobs.use_cron_store(central, bookkeeping=True):
+            assert jobs.get_cron_store_home(root) == central
+            assert notepad._current_notepad_file() == central / 'cron' / 'notepad.db'
+            with jobs.use_cron_store(root / 'nested', bookkeeping=True):
+                assert jobs.get_cron_store_home(root) == root / 'nested'
+            assert jobs.get_cron_store_home(root) == central
+        assert jobs.get_cron_store_home(root) == root
+        assert notepad._current_notepad_file() == original[1]
+
+
+def test_dual_root_journal_collision_holds_before_owner_or_transport(homes, monkeypatch):
+    from unittest.mock import Mock
+    from cron import jobs, scheduler_authority
+    from gateway import session_cron
+    root, _ = homes
+    with jobs.use_cron_store(root / 'separate-store'):
+        job = persisted_job(homes)
+        central = scheduler_authority.journal_path(job['id'], 'collision')
+        legacy = root / 'cron' / 'admissions' / central.name
+        record = json.dumps({'params': {'job_id': job['id'], 'request_id': 'collision'}})
+        for path in (central, legacy):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(record)
+        owner = Mock(side_effect=AssertionError('owner queried for ambiguous journal'))
+        transport = Mock(side_effect=AssertionError('transport queried for ambiguous journal'))
+        monkeypatch.setattr(session_cron, 'owner_for_home', owner)
+        monkeypatch.setattr(scheduler_authority, '_connect_owner', transport)
+        with pytest.raises(scheduler_authority.CronExecutionUnknown, match='conflicting'):
+            scheduler_authority.journal_path(job['id'], 'collision')
+        scheduler_authority.reconcile_pending()
+        owner.assert_not_called()
+        transport.assert_not_called()
+        assert central.read_text() == legacy.read_text() == record

@@ -48,9 +48,19 @@ def _record_executor(record, store_home):
 
 
 def journal_path(job_id, request_id):
-    from cron.jobs import get_cron_store_home
+    from cron.jobs import get_cron_store_home, get_job
+    from hermes_constants import get_hermes_home
     key = hashlib.sha256(json.dumps([job_id, request_id]).encode()).hexdigest()
-    return get_cron_store_home() / 'cron' / 'admissions' / (key + '.json')
+    legacy = get_hermes_home() / 'cron' / 'admissions' / (key + '.json')
+    central = get_cron_store_home() / 'cron' / 'admissions' / (key + '.json')
+    if legacy != central and legacy.exists() and central.exists():
+        raise CronExecutionUnknown('conflicting cron admission journals')
+    if legacy.exists():
+        return legacy
+    if central.exists():
+        return central
+    job = get_job(job_id)
+    return central if job and job.get('execution_profile') else legacy
 
 
 def _pause_identity(paused):
@@ -102,8 +112,8 @@ def run_canonical_job(job, *, extra_prompt=None, cancel_event=None, execution_id
     params = {'job_id': job['id'], 'request_id': request_id,
               'extra_prompt': extra_prompt}
     store_home = get_cron_store_home()
-    root = store_home / 'cron' / 'admissions'
     journal = journal_path(params['job_id'], params['request_id'])
+    root = journal.parent
     record = {'params': params, 'receipt': None}
     if journal.exists():
         record = json.loads(journal.read_text(encoding='utf-8-sig'))
@@ -117,7 +127,8 @@ def run_canonical_job(job, *, extra_prompt=None, cancel_event=None, execution_id
         record['execution_home'] = str(execution_profile_home(record['execution_profile']))
         params['store_profile'] = profile_name_for_home(store_home) or 'default'
     attempted = journal.exists()
-    executor_home = _record_executor(record, store_home)
+    from hermes_constants import get_hermes_home
+    executor_home = _record_executor(record, store_home) if 'execution_profile' in record else get_hermes_home()
     owner = owner_for_home(executor_home)
 
     def save():
@@ -210,8 +221,9 @@ def reconcile_pending(*, allow_connect=True):
     import logging
 
     store_home = get_cron_store_home()
-    root = store_home / 'cron' / 'admissions'
-    for journal in sorted(root.glob('*.json')):
+    from hermes_constants import get_hermes_home
+    roots = {store_home / 'cron' / 'admissions', get_hermes_home() / 'cron' / 'admissions'}
+    for journal in sorted({path for root in roots for path in root.glob('*.json')}):
         try:
             record = json.loads(journal.read_text(encoding='utf-8-sig'))
             params = record['params']
@@ -230,7 +242,8 @@ def reconcile_pending(*, allow_connect=True):
             if 'refusal' in record:
                 state = {'status': 'terminal', 'result': record['refusal'], 'job': record['job']}
             else:
-                executor_home = _record_executor(record, store_home)
+                executor_home = (_record_executor(record, store_home) if 'execution_profile' in record
+                                 else get_hermes_home())
                 owner = owner_for_home(executor_home)
                 if owner is None and not allow_connect:
                     continue

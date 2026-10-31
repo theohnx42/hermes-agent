@@ -93,7 +93,7 @@ def _bound_job(authority, params):
     if source is None:
         raise RuntimeStoreError('profile_mismatch')
     require_serving(source)
-    with use_cron_store(store):
+    with use_cron_store(store, bookkeeping=True):
         job = get_job(params['job_id'])
         if (job is None or not job.get('execution_profile')
                 or execution_profile_home(job['execution_profile']) != Path(authority.profile_id).resolve()
@@ -323,7 +323,7 @@ async def execute(authority, ref, row, policy):
                      or data.get('execution_home') != str(db_path.parent)
                      or data.get('store_home') != str(store))):
             raise RuntimeStoreError('profile_mismatch')
-        with use_cron_store(store), _profile_runtime_scope(db_path.parent):
+        with use_cron_store(store, bookkeeping='store_profile' in data), _profile_runtime_scope(db_path.parent):
             result = await asyncio.to_thread(_run_identified, run_job, job, execution_id,
                                              require_live_claim='store_profile' in data,
                                              extra_prompt=data['extra_prompt'], cancel_event=cancel)
