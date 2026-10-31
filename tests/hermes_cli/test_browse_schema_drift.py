@@ -641,6 +641,79 @@ def test_budget_interrupt_during_begin_is_retryable_without_changing_store(tmp_p
     assert "last_read_at" not in _session_columns(path)
 
 
+def test_durability_work_is_budgeted_even_when_its_helper_swallows_interrupt(tmp_path, monkeypatch):
+    """Mac durability VM work shares the DDL deadline, before BEGIN or any write."""
+    import hermes_state_reconcile as reconcile
+    import hermes_cli.sqlite_safe_read as safe_read
+    import hermes_state_wal as wal
+
+    path = _lagging_store_with_history(_profile_home(tmp_path), rows=0)
+    before = _file_state(path)
+    clock = [0.0]
+    budget = reconcile._Budget(3.0)
+    budget._clock = lambda: clock[0]
+    budget.deadline = 3.0
+    original = safe_read.connect_tracked
+    statements, completed = [], []
+
+    def connect(*args, **kwargs):
+        conn = original(*args, **kwargs)
+        conn.set_trace_callback(statements.append)
+        return conn
+
+    def durability_vm_work(conn):
+        # Deterministic scheduler/disk adversary, not a real sleep or a wider deadline.
+        for index in range(6):
+            clock[0] += 1.0
+            conn.execute('WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL '
+                         'SELECT x+1 FROM n WHERE x<256) SELECT sum(x) FROM n').fetchone()
+            completed.append(index)
+
+    monkeypatch.setattr(safe_read, 'connect_tracked', connect)
+    monkeypatch.setattr(wal, '_apply_macos_checkpoint_barrier', durability_vm_work)
+    # Keep the REAL best-effort helper: it catches the VM interruption.
+    with pytest.raises(reconcile.BrowseBudgetExceeded):
+        reconcile._apply_additive_schema(path, budget)
+    assert budget.expired
+    assert clock[0] == 3.0 and completed == [0, 1]
+    assert not any(sql.strip().upper() == 'BEGIN IMMEDIATE' for sql in statements)
+    assert _file_state(path) == before
+    assert 'last_read_at' not in _session_columns(path)
+
+
+def test_budgeted_durability_barriers_still_precede_the_write_transaction(tmp_path, monkeypatch):
+    import hermes_state_reconcile as reconcile
+    import hermes_cli.sqlite_safe_read as safe_read
+    import hermes_state_wal as wal
+
+    path = _lagging_store_with_history(_profile_home(tmp_path), rows=0)
+    original = safe_read.connect_tracked
+    checkpoint = wal._apply_macos_checkpoint_barrier
+    synchronous = wal._enforce_macos_synchronous_full
+    events = []
+
+    def connect(*args, **kwargs):
+        conn = original(*args, **kwargs)
+        conn.set_trace_callback(lambda sql: events.append(sql.strip().upper()))
+        return conn
+
+    def barrier(conn):
+        events.append('CHECKPOINT_BARRIER')
+        checkpoint(conn)
+
+    def sync(conn):
+        events.append('SYNCHRONOUS_FULL')
+        synchronous(conn)
+
+    monkeypatch.setattr(safe_read, 'connect_tracked', connect)
+    monkeypatch.setattr(wal, '_apply_macos_checkpoint_barrier', barrier)
+    monkeypatch.setattr(wal, '_enforce_macos_synchronous_full', sync)
+    reconcile._apply_additive_schema(path)
+    assert events.index('CHECKPOINT_BARRIER') < events.index('SYNCHRONOUS_FULL')
+    assert events.index('SYNCHRONOUS_FULL') < events.index('BEGIN IMMEDIATE')
+    assert reconcile.schema_drift_reason(path) is None
+
+
 def test_equal_cardinality_corrupt_index_plus_drift_is_not_written(tmp_path):
     """R2-3: quick_check does not compare index keys with the table, so two equal-size indexes
     with swapped root pages pass it. Browse must still refuse as corrupt and write nothing."""
