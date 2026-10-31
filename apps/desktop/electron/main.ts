@@ -1,12 +1,14 @@
 import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
 
+import { requireExistingRuntime } from './existing-runtime'
 import type { GatewayEndpoint } from './local-gateway'
 import { configurePythonGatewayTicketClient, createLocalGatewayDials, createStaleGatewayRestarter, ensureLocalGateway, gatewayOwnerProfile, localGatewayDial, nativeGatewayHttpHeaders, redialLocalGateway, runGatewayEnsure, runGatewayOwnerRestart } from './local-gateway'
+import { createLocalProfileBackendRouting } from './local-gateway-owner-routing'
 import { closeGatewayTicketBridges, createGatewayTicketResolver } from './local-gateway-python'
 import { createPluginWsUrlHandler } from './plugin-ws-url'
 const localGatewayDials = createLocalGatewayDials()
 configurePythonGatewayTicketClient(createGatewayTicketResolver(
-  async () => ensureRuntime(await resolveHermesBackend([]), () => undefined), resolveHermesCwd))
+  async () => ensureRuntime(requireExistingRuntime(await resolveHermesBackend([])), () => undefined), resolveHermesCwd))
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
@@ -170,7 +172,6 @@ import {
   type RegistryBackendRequestScope,
   resolveAuthMode,
   resolveProfileApiRequest,
-  resolveProfileBackendRoute,
   resolveRemoteSshDashboardProfile,
   resolveTestWsUrl,
   sanitizeRemoteHeaderValue,
@@ -683,6 +684,7 @@ import {
   detectRemotePlatform,
   helper,
   probeWindowsRemote,
+  readRemoteProfileInventory,
   terminateOwnedWindowsDashboardForUpdate
 } from './windows-remote-lifecycle'
 import {
@@ -10556,23 +10558,28 @@ function profileRouteOptions(
 // so the next ensureBackend() re-runs `gateway ensure` (attach or start) instead
 // of minting tickets against a dead control socket. Nothing is killed: the
 // descriptor never owned the runtime.
-async function forgetLocalGatewayDescriptor(profile, request?: { method?: string; path?: string }) {
-  const key = profile && String(profile).trim() ? String(profile).trim() : primaryProfileKey()
-  // Resolve the route the failed call used (B2-15): an unscopable mutation's stale entry is pooled.
-  const route = resolveProfileBackendRoute(key, profileRouteOptions(key, request))
-
-  if (route.backend === 'primary') {
+const localProfileBackends = createLocalProfileBackendRouting({
+  primaryProfile: primaryProfileKey,
+  routeOptions: profileRouteOptions,
+  assertCanStart: key => profileDeletionGate.assertCanStart(key),
+  startPrimary: startHermes,
+  pool: backendPool,
+  newEntry: newPoolEntry,
+  dialProfile: dialPoolBackend,
+  assertNotPassiveSpawn,
+  recordLocal: setWslBridgeProfileState,
+  forgetFailedEntry: forgetFailedPoolEntry,
+  logFailure: logPoolSpawnFailure,
+  log: rememberLog,
+  invalidatePrimary: () => {
     const attempt = backendConnectionState.startAttempt()
     attempt.promise = backendConnectionState.getPromise()
     backendConnectionState.clearPromiseForAttempt(attempt)
-    rememberLog(`[gateway] forgot stale canonical endpoint for primary "${key}"; re-ensuring`)
-
-    return
   }
+})
 
-  if (backendPool.delete(key)) {
-    rememberLog(`[gateway] forgot stale canonical endpoint for profile "${key}"; re-ensuring`)
-  }
+async function forgetLocalGatewayDescriptor(profile, request?: { method?: string; path?: string }) {
+  return localProfileBackends.forget(profile, request)
 }
 
 // Registry twin of forgetLocalGatewayDescriptor: a 'local' registry connection
@@ -10600,60 +10607,7 @@ async function ensureBackend(
   profile,
   opts: { passive?: boolean; request?: { method?: string; path?: string } } = {}
 ) {
-  const key = profile && String(profile).trim() ? String(profile).trim() : primaryProfileKey()
-  const passive = Boolean(opts.passive)
-
-  profileDeletionGate.assertCanStart(key)
-
-  // The REQUEST is part of the routing decision (case 5/6): resolving without
-  // it would collapse a profile onto the shared backend that the caller's
-  // resolveProfileApiRequest deliberately kept pooled, and the unscopable
-  // destructive write would execute against the primary's home after all.
-  const routeOpts = profileRouteOptions(key, opts.request)
-  const route = resolveProfileBackendRoute(key, routeOpts)
-
-  if (route.backend === 'primary') {
-    const connection = await startHermes(key)
-    setWslBridgeProfileState(key, connection.mode !== 'remote')
-
-    // A shared backend still owes the caller its profile scope, so renderer-side
-    // WebSocket, filesystem, and cache routing target the selected profile.
-    // `sharedPrimary` marks this as the shared-primary route: pooled backends
-    // also carry `profile`, so only this descriptor gets the flag. The
-    // unshared primary carries its own key too: a profile-less descriptor
-    // reads as "default" downstream, which breaks per-source profile memory
-    // (the primary IS "default" only when it actually booted as default).
-    return route.descriptorProfile
-      ? { ...connection, profile: route.descriptorProfile, sharedPrimary: true }
-      : { ...connection, profile: key }
-  }
-
-  const existing = backendPool.get(key)
-
-  if (existing) {
-    const connection = await existing.connectionPromise
-    setWslBridgeProfileState(key, connection.mode !== 'remote')
-
-    return connection
-  }
-
-  assertNotPassiveSpawn(passive, key)
-  const entry = newPoolEntry()
-
-  entry.connectionPromise = dialPoolBackend(key, entry).catch(error => {
-    // Land the failure in desktop.log: without this a dial that fails before
-    // the gateway answers (guard rejection, runtime resolution) leaves no trace
-    // beyond renderer-side rejections users never see in a bundle.
-    logPoolSpawnFailure(`"${key}"`, error)
-    forgetFailedPoolEntry(key, entry)
-    throw error
-  })
-  backendPool.set(key, entry)
-
-  const connection = await entry.connectionPromise
-  setWslBridgeProfileState(key, connection.mode !== 'remote')
-
-  return connection
+  return localProfileBackends.ensure(profile, opts)
 }
 
 // ── Registry-scoped backends (multi-connection, PR 2 of the campaign) ──────
@@ -11490,12 +11444,8 @@ function assertPoolEntryStillOwned(poolKey: string, entry: any) {
 // Resolve the connection descriptor for a named profile that is not the
 // primary: attach to (or start) its canonical local gateway via
 // `hermes gateway ensure`, or verify and describe its remote. Mirrors the local
-// portion of startHermes() without the boot-progress UI, bootstrap, or
-// first-run handling (those belong to the primary only). `opts.forceLocal`
-// skips remote resolution entirely (the registry 'local' entry means THIS
-// machine regardless of the v1 routing table); `opts.poolKey` is the
-// backendPool key when it differs from the profile name (composite registry
-// scopes) so failure cleanup forgets the right entry.
+// portion of startHermes(), but installation belongs to explicit primary setup.
+// `forceLocal` selects this machine; `poolKey` retains the registry ownership scope.
 async function dialPoolBackend(profile, entry, opts: { forceLocal?: boolean; poolKey?: string } = {}) {
   const poolKey = opts.poolKey || profile
 
@@ -11530,7 +11480,7 @@ async function dialPoolBackend(profile, entry, opts: { forceLocal?: boolean; poo
 
   const connection = await ensureLocalGateway(async () => {
     const backend = await ensureRuntime(
-      await resolveHermesBackend(['--profile', profile, 'gateway', 'ensure', '--json']),
+      requireExistingRuntime(await resolveHermesBackend(['--profile', profile, 'gateway', 'ensure', '--json'])),
       () => assertPoolEntryStillOwned(poolKey, entry)
     )
 
@@ -11579,7 +11529,7 @@ const GATEWAY_RESTART_CLIENT_TIMEOUT_MS = 120_000
 // what answers.
 async function restartLocalGatewayOwner(ownerProfile: string): Promise<void> {
   const result = await runGatewayOwnerRestart(async args => {
-    const backend = await ensureRuntime(await resolveHermesBackend(args), () => undefined)
+    const backend = await ensureRuntime(requireExistingRuntime(await resolveHermesBackend(args)), () => undefined)
 
     return runGatewayEnsure(
       { ...backend, env: desktopBackendSpawnEnv(backend.env || {}) },
@@ -14908,7 +14858,7 @@ async function probeSshProfileInventory(connection) {
 
   try {
     await ssh.open()
-    const profiles = await remoteLifecycle.listRemoteHermesProfiles(ssh)
+    const { profiles, installId } = await readRemoteProfileInventory(ssh, sshConfig.remoteHermesPath || '')
 
     if (profiles.length > 0) {
       sshRosterCache.set(connection.id, profiles)
@@ -14918,7 +14868,7 @@ async function probeSshProfileInventory(connection) {
     // install id at all, so two addresses for one machine never collapse into one roster row
     // (#88828 wired this for remote/local only, through /api/status).
     connectionInstallIds.set(connection.id, {
-      id: await remoteLifecycle.readRemoteInstallId(ssh),
+      id: installId,
       ts: Date.now()
     })
   } catch (error: any) {

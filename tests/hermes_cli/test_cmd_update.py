@@ -127,3 +127,44 @@ class TestGitTrampolineSelfHeal:
         assert candidates[1] == (
             profile_home / "git" / "mingw64" / "libexec" / "git-core" / "git.exe"
         )
+
+
+@pytest.mark.parametrize("layout", ["clangarm64/libexec/git-core", "mingw64/libexec/git-core",
+                                    "mingw32/libexec/git-core", "ucrt64/bin"])
+@pytest.mark.parametrize("probe", [False, True, None])
+def test_native_git_layouts_require_accepted_probe(tmp_path, monkeypatch, layout, probe):
+    from hermes_cli import update_cmd_git as git
+
+    roots = {r"C:\Program Files": tmp_path / "programfiles",
+             r"C:\Program Files (x86)": tmp_path / "programfiles-x86"}
+    candidate = roots[r"C:\Program Files"] / "Git" / layout / "git.exe"
+    candidate.parent.mkdir(parents=True)
+    candidate.write_bytes(b"fixture")
+    monkeypatch.setattr(git, "Path", lambda base: roots[base])
+    monkeypatch.setattr(git, "_portable_git_candidates", list)
+    calls = []
+    def observed(argv):
+        calls.append(argv)
+        return probe
+    monkeypatch.setattr(git, "_probe_fork_bomb", observed)
+    assert git._locate_real_git() == (candidate if probe is False else None)
+    assert calls == [[str(candidate)]]
+
+
+def test_portable_ucrt_git_in_shared_root_before_profile(tmp_path, monkeypatch):
+    import hermes_constants
+    from hermes_cli import update_cmd_git as git
+
+    root = tmp_path / "root"
+    profile = root / "profiles" / "owner"
+    monkeypatch.setattr(hermes_constants, "get_default_hermes_root", lambda: root)
+    monkeypatch.setattr(hermes_constants, "get_hermes_home", lambda: profile)
+    candidates = git._portable_git_candidates()
+    assert candidates[-2:] == [root / "git/ucrt64/bin/git.exe", profile / "git/ucrt64/bin/git.exe"]
+    shared = candidates[-2]
+    shared.parent.mkdir(parents=True)
+    shared.write_bytes(b"fixture")
+    monkeypatch.setattr(git, "_portable_git_candidates", lambda: candidates)
+    monkeypatch.setattr(git, "Path", lambda base: tmp_path / "empty-standard-root")
+    monkeypatch.setattr(git, "_probe_fork_bomb", lambda argv: False)
+    assert git._locate_real_git() == shared

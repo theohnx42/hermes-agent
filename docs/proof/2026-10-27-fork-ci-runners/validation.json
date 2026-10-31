@@ -1,0 +1,196 @@
+{
+  "source_base": "e5dd0631b836d990a4b3d4021dd507d53b433d90",
+  "status": "SEMANTIC_ALLOWLIST_PASS",
+  "workflow_files": 25,
+  "allowlist": [
+    "runner labels preserving upstream branch",
+    "unit job display name",
+    "unit slice matrix",
+    "unit slice/worker env",
+    "OS matrix runner labels",
+    "OS Windows worker env"
+  ],
+  "all_other_YAML_semantics": "exactly unchanged including triggers/if/needs/permissions/actions/secrets/concurrency/timeouts/security/publishing",
+  "tests": "182 PASS / 0 failed / 8.3s canonical scripts/run_tests.sh",
+  "actionlint": "not available in PATH or standard checked installation paths; not installed",
+  "runtime": "not changed",
+  "ci_runs": "not rerun; hosted execution still unproven",
+  "limits": [
+    "standard public fork runners have14GB SSD versus80GB+ Blacksmith; actual install/build disk use unqualified",
+    "30min unit and60min native ARM/Nix timeouts preserved; real fork execution required",
+    "sixteen unit slices preserve suite, may queue under GitHub concurrency limits",
+    "manual/release E2E and publishing-only workflows intentionally remain upstream runner policy"
+  ],
+  "files": [
+    {
+      "path": ".github/workflows/blob-size-check.yml",
+      "candidate_sha256": "3707551d2ccf6fdfd8fb7e58d42ef18a05a25aa5a740235ad2a2f459cb20007e"
+    },
+    {
+      "path": ".github/workflows/bootstrap-installer.yml",
+      "candidate_sha256": "86136139425a76b9a987a0d9abc767f7c25ca4af2fefd70b2e35ec78a31070de"
+    },
+    {
+      "path": ".github/workflows/case-collision-check.yml",
+      "candidate_sha256": "15d950c5bb2cfe56665619530da1e872ffe5d2ecc76f860ffe9663d561353469"
+    },
+    {
+      "path": ".github/workflows/catalog-tests.yml",
+      "candidate_sha256": "ff0eedb63972e796c783266d57246494218b9b1475b2d3860794294224ea2ab8"
+    },
+    {
+      "path": ".github/workflows/ci.yaml",
+      "candidate_sha256": "da4258d69a4104a01c5ff6a6e6e516804c7509794c6da19a536da2f5e9a90b54"
+    },
+    {
+      "path": ".github/workflows/contributor-check.yml",
+      "candidate_sha256": "ec8adea5e2267da855653566fa1447ae6d58f269f320b6d795e0b5598b0fbc14"
+    },
+    {
+      "path": ".github/workflows/docker-lint.yml",
+      "candidate_sha256": "87bc44905ff16b277d78f9e728786bd98d523c89c5625d3d73dd85222fc10eca"
+    },
+    {
+      "path": ".github/workflows/docker.yml",
+      "candidate_sha256": "31253196ec10be52cce7c1eb5afaf2cf3726fd2acbf449285313295df8741dfb"
+    },
+    {
+      "path": ".github/workflows/docs-site-checks.yml",
+      "candidate_sha256": "1df27476fbaa45b375a42fa84a2ba8c2801beb75d7bc98252f077bce08c6b7a8"
+    },
+    {
+      "path": ".github/workflows/history-check.yml",
+      "candidate_sha256": "c86d79d232b3f7da42c9a43629038f956b020d0823e5551e20c699d7160ea426"
+    },
+    {
+      "path": ".github/workflows/icons-freshness-check.yml",
+      "candidate_sha256": "1ebc21081f8920ac0a4a5eb59a2266f521fc6a9195a608a54561a00f07b2146c"
+    },
+    {
+      "path": ".github/workflows/infographic-check.yml",
+      "candidate_sha256": "b1d109b37bda143477d4ea4f39edd43735a7d29fc76b9b209601d96d2ea333c6"
+    },
+    {
+      "path": ".github/workflows/js-tests.yml",
+      "candidate_sha256": "03dc19d69e7ddb299b4b168b07c80608761bdf2f19cc18c70f1c4e9753c396f3"
+    },
+    {
+      "path": ".github/workflows/lazy-deps-guard.yml",
+      "candidate_sha256": "9746b03f019b120a0f17e2b7340cc5479437c115d8bd58ec1ef8d8596f7c8145"
+    },
+    {
+      "path": ".github/workflows/lint.yml",
+      "candidate_sha256": "2b9098b099cc8085fd3f5e130cea5681b2db934b8dee52a378338a72bcb49ba2"
+    },
+    {
+      "path": ".github/workflows/lockfile-diff.yml",
+      "candidate_sha256": "5dfdc26742d69513f73ac17b62d46f53e63b554ca006973ad977ff057e71843e"
+    },
+    {
+      "path": ".github/workflows/nix.yml",
+      "candidate_sha256": "84377745025a0f27fb92934f04013d4d325c05a1570aa9aacfbe9bf6d8a0eda4"
+    },
+    {
+      "path": ".github/workflows/profile-artifact-check.yml",
+      "candidate_sha256": "f6912dbf0ba636af5e0a5a6a68a6056ff57b7cb30e19e100e76af4f12819ec9f"
+    },
+    {
+      "path": ".github/workflows/prompt-surface-diff.yml",
+      "candidate_sha256": "ae5e68ca35a05cced7491413d5339bd09af0c5fb7e9ec54a0e718bbc128da041"
+    },
+    {
+      "path": ".github/workflows/remote-backends.yml",
+      "candidate_sha256": "0e48987d206b818f6a9ed23ccd316ba3b99d1df1cdcd622e564a8f133565e947"
+    },
+    {
+      "path": ".github/workflows/rust-tests.yml",
+      "candidate_sha256": "a4331aa11f7bc32663a09b9229f0ef7805f26888f18ad6727b646b2d6c5d0783"
+    },
+    {
+      "path": ".github/workflows/supply-chain-audit.yml",
+      "candidate_sha256": "40919aea4a5a43dc2052d9865a4a66764178781bacd604bf02d5ba89f944da14"
+    },
+    {
+      "path": ".github/workflows/tests-os.yml",
+      "candidate_sha256": "b27424002ab264f04dc79dce2d259460d648f94a776e2a33abb9d961834da60f"
+    },
+    {
+      "path": ".github/workflows/tests.yml",
+      "candidate_sha256": "e4c9068f05ba2de02b447592218093d66cd64b25e19e0c6d98e9dda757a8d47e"
+    },
+    {
+      "path": ".github/workflows/uv-lockfile-check.yml",
+      "candidate_sha256": "65c0adf66f7fab0b6ace7958d3f1ee216c51bc7af6cec82f8b7772b4c40d00ea"
+    }
+  ],
+  "windows_resource_followup": {
+    "source_base": "3b822093f993114eab72f0552628224e082090d0",
+    "status": "SOURCE_CANDIDATE_NATIVE_HOSTED_ACCEPTANCE_PENDING",
+    "evidence": {
+      "run_id": 40564037603,
+      "x64_job_id": 122400521911,
+      "assertions_passed": 736,
+      "assertions_failed": 0,
+      "timed_out_files": {
+        "test_desktop_update_windows_commit_outcome.py": "6/12 cases passed before300s",
+        "test_desktop_update_windows_handoff_lineage.py": "8/10 cases passed before300s"
+      },
+      "total_file_wall_seconds": 4310.6,
+      "runner_seconds": 1079.9,
+      "workers": 4,
+      "p99_file_seconds": 299.44,
+      "max_file_seconds": 301.8
+    },
+    "candidate": {
+      "fork_windows_workers": 2,
+      "upstream_windows_workers": 16,
+      "fork_x64_job_minutes": 45,
+      "upstream_x64_and_all_macos_minutes": 30,
+      "explicit_arm_minutes": 60,
+      "per_test_file_limits_selection_shards_and_failure_gates": "UNCHANGED",
+      "budget_basis": "4310.6 / 2 = 2155.3s = 35.9min without assumed speedup; fork x64 job45min admits measured workload plus setup/cleanup."
+    },
+    "checks": {
+      "policy_pytest": "7 PASS /3.42s",
+      "baseline_new_policy_test": "1 FAIL /6 deselected /0.90s against unchanged worker4 baseline",
+      "yaml_semantics": "Identical after removing only jobs.os-tests.timeout-minutes and RunTests env.HERMES_TEST_WORKERS",
+      "actual_base_code_health": "0 blocking /0 advisory",
+      "changed_python_ruff": "PASS",
+      "diff_check": "PASS",
+      "independent_coordinator": "Exact workflow/test hashes matched; same full-source policy suite7PASS/6.12s"
+    },
+    "runtime_changes": false,
+    "inference_or_native_children": 0,
+    "candidate_sha256": {
+      ".github/workflows/tests-os.yml": "0c54f095fdfc36b8a2dcd41f293c01a411cfd9e7d951578f4d4fce38f5446d9c",
+      "tests/ci/test_fork_hosted_runners.py": "ebc48390bc15ed39fc51304265cc3adb3287943d4239f467ed3d0a0ed48dcdcf",
+      "docs/proof/2026-10-27-fork-ci-runners/README.md": "ea826ef2370e7a6337ff5df8a6e6c2ab5e50a621b9b1f2561d4ffbe04e59d50d"
+    }
+  },
+  "arm_remaining_budget_followup": {
+    "status": "REVIEWED_SOURCE_CANDIDATE_NATIVE_ACCEPTANCE_PENDING",
+    "published_head": "671d3d2edaac0e9ad2838fe1e4dff27200136f77",
+    "run": 40572669947,
+    "job": 122430823482,
+    "observed": "11/12 tests PASS then whole-file300s cutoff during last bounded-help test; no assertion failure",
+    "file_seconds": 301.1,
+    "destination_duration": "Selected ARM file absent top10, tenth19.36s; inferred bound only. Artifact unavailable: invalid ZIP",
+    "validation": {
+      "test_function_asts_including_decorators": "13 identical across both files",
+      "actual_import_collection": "23 parametrized tests collected in0.15s under Git-free actual source projection with existingPM3.14.7/pytest overlay; shared helper import succeeds",
+      "ruff": "2 changed Python files PASS",
+      "diff_check": "PASS"
+    },
+    "preserved": [
+      "production",
+      "probe10s",
+      "handoff120s",
+      "file300s",
+      "workers2",
+      "assertions",
+      "cleanup guards"
+    ],
+    "runtime_actions": [],
+    "resume": "Root approved ordinary PR7 publication; native CI acceptance remains required. PR6 frozen until full green and accepted base advance."
+  }
+}

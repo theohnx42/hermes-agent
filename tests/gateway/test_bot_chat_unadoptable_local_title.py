@@ -76,3 +76,71 @@ async def test_kept_local_bot_chat_history_is_never_moved_aside(headless, column
     else:
         assert column is None and record['session_id'] == old
     assert db.get_session_by_title('Bot Chat')['id'] == old and len(db._read_all('SELECT id FROM sessions')) == 1
+
+
+@pytest.mark.asyncio
+async def test_fresh_native_receipt_uses_its_implicit_creation_segment(headless):
+    from hermes_state_local import local_receipt
+    from tools.bot_live_delivery import _bot_chat_tip
+    from tests.waiting import async_wait_until
+
+    record = await _deliver(headless.authority, 'd')
+    await async_wait_until(lambda: len(headless.executed) == 1, timeout=10)
+    db = headless.authority.db
+    sid = record['session_id']
+    # This is the real authority constructor's receipt, not a hand-built schema.
+    receipt = local_receipt(db, sid)
+    assert 'lineage' not in receipt and receipt['entry']['session_id'] == sid
+    count = len(db._read_all('SELECT admission_id FROM session_admissions'))
+    assert _bot_chat_tip(Path(db.db_path).parent) == sid
+    assert len(db._read_all('SELECT admission_id FROM session_admissions')) == count
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('lineage', [None, 'not-a-list', {}, [], ['foreign'], [1]])
+async def test_explicit_invalid_native_lineage_still_refuses_without_admission(headless, lineage):
+    import json
+    from hermes_state_local import POLICY_PREFIX, local_receipt
+    from tools.bot_live_delivery import _bot_chat_tip
+    from tests.waiting import async_wait_until
+
+    record = await _deliver(headless.authority, 'e')
+    await async_wait_until(lambda: len(headless.executed) == 1, timeout=10)
+    db = headless.authority.db
+    sid = record['session_id']
+    receipt = local_receipt(db, sid)
+    receipt['lineage'] = lineage
+    db._execute_write(lambda conn: conn.execute('UPDATE state_meta SET value=? WHERE key=?',
+                                               (json.dumps(receipt), POLICY_PREFIX + sid)))
+    count = len(db._read_all('SELECT admission_id FROM session_admissions'))
+    with pytest.raises(RuntimeStoreError, match='storage_unavailable'):
+        _bot_chat_tip(Path(db.db_path).parent)
+    assert len(db._read_all('SELECT admission_id FROM session_admissions')) == count
+    assert len(headless.executed) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('target_exists', [False, True])
+async def test_native_tip_never_accepts_missing_or_foreign_physical_target(headless, target_exists):
+    import json
+    from hermes_state_local import POLICY_PREFIX, local_receipt
+    from tools.bot_live_delivery import _bot_chat_tip
+    from tests.waiting import async_wait_until
+
+    record = await _deliver(headless.authority, 'f')
+    await async_wait_until(lambda: len(headless.executed) == 1, timeout=10)
+    db = headless.authority.db
+    sid = record['session_id']
+    if target_exists:
+        db.create_session('foreign-child', 'tui')
+        db._execute_write(lambda conn: conn.execute('UPDATE sessions SET chat_id=? WHERE id=?',
+                                                   ('another-owner', 'foreign-child')))
+    receipt = local_receipt(db, sid)
+    receipt['entry']['session_id'] = 'foreign-child'
+    receipt['lineage'] = [sid, 'foreign-child']
+    db._execute_write(lambda conn: conn.execute('UPDATE state_meta SET value=? WHERE key=?',
+                                               (json.dumps(receipt), POLICY_PREFIX + sid)))
+    count = len(db._read_all('SELECT admission_id FROM session_admissions'))
+    with pytest.raises(RuntimeStoreError, match='storage_unavailable'):
+        _bot_chat_tip(Path(db.db_path).parent)
+    assert len(db._read_all('SELECT admission_id FROM session_admissions')) == count

@@ -1,0 +1,371 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-27",
+  "base_commit": "c7ac144ec1538d35f42daffa17a5492771d11e5a",
+  "scope": "source candidate only; no runtime adoption or native Windows pass claimed",
+  "service_identity": {
+    "cause": "Accepted synchronous WSH producer template was refused by older identity consumer grammar.",
+    "baseline_regression": {
+      "failed": 1,
+      "passed": 4
+    },
+    "candidate_suite": {
+      "passed": 62,
+      "skipped": 6
+    },
+    "preserved": "Legacy template, principal/home/argv validation, modern declaration/wait/exit/extra-statement refusals."
+  },
+  "marker_lock": {
+    "classification": "Fixture observation failure: synchronous WMI lookup escaped its own deadline. Production update handoff unchanged.",
+    "change": "Existing psutil direct-child exact update/--yes argv observation; same 60-second deadline, identity pin and no-update assertions preserved.",
+    "portable_tests": {
+      "passed": 7,
+      "skipped": 3
+    },
+    "native_windows": "pending"
+  },
+  "git_locator": {
+    "classification": "Initial failure lacked layout evidence; subsequent official release/archive qualification proves UCRT64 path omission. Native CI diagnostic still pending.",
+    "change": "Initial diagnostic-only stage superseded by verified UCRT64 follow-up below. Current bounded diagnostics cover twelve candidates, with two-second custody probes, metadata/error class/return code only and no raw stdout/stderr/env.",
+    "native_evidence": "Readonly NIGHTFALL query finds both git-core/git.exe and mingw64/bin/git.exe. CI checkout uses C:/Program Files/Git/bin/git.exe 2.56.0.windows.2; this does not prove internal layout.",
+    "ucrt64_followup": {
+      "release": "https://github.com/git-for-windows/git/releases/tag/v2.56.0.windows.2",
+      "asset": "MinGit-2.56.0.2-64-bit.zip",
+      "sha256": "da35e72aa21c005a5a0d298cfbae110bc1609a815730ea0dde84b01a1b3cd3be",
+      "digest_verified": true,
+      "archive_git_executables": [
+        "cmd/git.exe",
+        "ucrt64/bin/git.exe"
+      ],
+      "absent": "ucrt64/libexec/git-core/git.exe",
+      "execution_or_install": false,
+      "candidate": "Append exact ucrt64/bin/git.exe standard and managed portable candidates; preserve legacy ordering and definite accepted probe requirement.",
+      "baseline_regression": {
+        "failed": 4,
+        "passed": 9
+      },
+      "candidate_test_file": {
+        "passed": 15,
+        "skipped": 3
+      },
+      "diagnostic_budget": "Twelve candidates maximum, two-second custody probe per existing regular file; no raw output or env."
+    }
+  },
+  "runner": {
+    "python": "existing PM Python 3.14.7; CI 3.14.9",
+    "source": "Git-free private fixture, existing copied pytest framework, home I/O guard enabled",
+    "no_install": true
+  },
+  "checks": {
+    "ruff": "PASS",
+    "diff_check": "PASS"
+  },
+  "source_sha256": {
+    "hermes_cli/gateway_runtime_service_identity.py": "25a91b6b08063941cb08e582b35541863293bdd2495ef66e341089a3fae48428",
+    "tests/hermes_cli/test_gateway_runtime_service.py": "df0571ba9fda85157b97fbec4a65aeb4c3fad34576bbbe56921c9ad8b63b6015",
+    "tests/hermes_cli/test_git_trampoline_windows_live.py": "88831260686f49ec5921a9403b13e53982ec43de91718adac7c6b3bcb44e93fa",
+    "tests/scripts/desktop_update/test_desktop_update_windows_marker_lock.py": "f48b04cb95b456be13153d68bf043810f6b1fafdfaa9b96fa24aae9c5c9b81e7",
+    "hermes_cli/update_cmd_git.py": "200ea2096b9671d096403f462ee911a8d052128d4b64a38cc4885c1fccd912c0",
+    "tests/hermes_cli/test_cmd_update.py": "aa597a08bf15873f204972fd5b1fe7e42edad1ce5d7c2e8aec04b62eae096300",
+    "tests/hermes_cli/test_local_runtime_processes.py": "0feac7699f4c83234d3e7555e993b71ffe511599375405c05bb8643ace0638da",
+    "tests/hermes_cli/test_taskkill_identity_windows_live.py": "8da6fb76b15abbccf879bcc1c21a7124a02e63513447e62cbfa7b7f4b9db3ac2"
+  },
+  "suspended_state_observation": {
+    "source_equivalent_to_combined_head": "94959087c8a6f4d2bb062e36fb13ca268f3c53db",
+    "ci_observation": "Windows x64 assign fixture immediate psutil status was running, while resume sibling and other six cases passed. This does not prove execution or a status race.",
+    "candidate": "Fixture-only existing _wait on same STATUS_STOPPED requirement, maximum2s; unconditional no-marker, real kernel/job limits, noninheritance, kill/wait and handle/stream guards preserved. Production containment unchanged.",
+    "native_probe": {
+      "python": "3.14.9",
+      "psutil": "7.2.2",
+      "resumed": false,
+      "trials": [
+        {
+          "trial": 0,
+          "pid": 55300,
+          "statuses": [
+            {
+              "status": "stopped",
+              "elapsed_seconds": 0.025846799995633774
+            }
+          ],
+          "stopped": true,
+          "marker_absent": true,
+          "child_exited": true,
+          "handle_closed": true,
+          "streams_closed": true
+        },
+        {
+          "trial": 1,
+          "pid": 64320,
+          "statuses": [
+            {
+              "status": "stopped",
+              "elapsed_seconds": 0.05861399999412242
+            }
+          ],
+          "stopped": true,
+          "marker_absent": true,
+          "child_exited": true,
+          "handle_closed": true,
+          "streams_closed": true
+        },
+        {
+          "trial": 2,
+          "pid": 44728,
+          "statuses": [
+            {
+              "status": "stopped",
+              "elapsed_seconds": 0.015652100002625957
+            }
+          ],
+          "stopped": true,
+          "marker_absent": true,
+          "child_exited": true,
+          "handle_closed": true,
+          "streams_closed": true
+        },
+        {
+          "trial": 3,
+          "pid": 45292,
+          "statuses": [
+            {
+              "status": "stopped",
+              "elapsed_seconds": 0.015001500010839663
+            }
+          ],
+          "stopped": true,
+          "marker_absent": true,
+          "child_exited": true,
+          "handle_closed": true,
+          "streams_closed": true
+        },
+        {
+          "trial": 4,
+          "pid": 60600,
+          "statuses": [
+            {
+              "status": "stopped",
+              "elapsed_seconds": 0.026538599995546974
+            }
+          ],
+          "stopped": true,
+          "marker_absent": true,
+          "child_exited": true,
+          "handle_closed": true,
+          "streams_closed": true
+        }
+      ],
+      "owner_handles_before": 168,
+      "owner_handles_after": 171
+    },
+    "native_environment": {
+      "python": "3.14.9",
+      "executable_exists": true,
+      "psutil": "7.2.2",
+      "psutil_file": "C:\\Users\\austi\\AppData\\Local\\hermes\\installs\\5ba46b7bb98197ea\\environments\\76a2e0bacfd94c2fad8e1106c67a061b\\venv\\Lib\\site-packages\\psutil\\__init__.py",
+      "module_under_selected_environment": true
+    },
+    "native_probe_sha256": "f627da188680b097aa15934074bde8414592c9406336b146b52e8dcc1a1ddacd",
+    "native_environment_sha256": "992e55616c7f600ea319cd273c44a4321bbb42ae55f9354ccc6720319ba211cd",
+    "race_reproduced": false,
+    "handle_boundary": "All five owned Popen handles/streams explicitly closed. Owner handle count168\u2192171 recorded; not claimed as a proven zero-leak process-wide metric.",
+    "first_probe_draft": "Unexported subprocess.CREATE_SUSPENDED attribute failed before child creation; corrected to maintained production0x4 value.",
+    "native_ci_acceptance": "pending; no repeat native children or production activation"
+  },
+  "taskkill_identity_sleeper": {
+    "ci_head": "d1271e33fe2013067e85dccf2fec08cd0d47b795",
+    "ci_observation": "Single matching-identity case taskkill returned nonzero no-running-instance for a child; six other tests passed. Automatic retry7PASS remains a flaky RED boundary, not acceptance.",
+    "native_probe": {
+      "python": "3.14.9",
+      "psutil": "7.2.2",
+      "trials": [
+        {
+          "trial": 0,
+          "mode": "venv",
+          "original_pid": 59512,
+          "ready_process": {
+            "pid": 41520,
+            "parent": 59512
+          },
+          "identities": [
+            {
+              "pid": 59512,
+              "created": 1793125906.6568625,
+              "parent": 56744
+            },
+            {
+              "pid": 41520,
+              "created": 1793125906.6717825,
+              "parent": 59512
+            }
+          ],
+          "taskkill_returncode": 0,
+          "no_running_instance": false,
+          "access_denied": false,
+          "kernel_states": [
+            {
+              "pid": 59512,
+              "kernel_exited": true
+            },
+            {
+              "pid": 41520,
+              "kernel_exited": true
+            }
+          ],
+          "original_popen_exited": true,
+          "kernel_handles_closed": true
+        },
+        {
+          "trial": 1,
+          "mode": "venv",
+          "original_pid": 56160,
+          "ready_process": {
+            "pid": 53168,
+            "parent": 56160
+          },
+          "identities": [
+            {
+              "pid": 56160,
+              "created": 1793125907.0386603,
+              "parent": 56744
+            },
+            {
+              "pid": 53168,
+              "created": 1793125907.042837,
+              "parent": 56160
+            }
+          ],
+          "taskkill_returncode": 0,
+          "no_running_instance": false,
+          "access_denied": false,
+          "kernel_states": [
+            {
+              "pid": 56160,
+              "kernel_exited": true
+            },
+            {
+              "pid": 53168,
+              "kernel_exited": true
+            }
+          ],
+          "original_popen_exited": true,
+          "kernel_handles_closed": true
+        },
+        {
+          "trial": 2,
+          "mode": "venv",
+          "original_pid": 22688,
+          "ready_process": {
+            "pid": 57520,
+            "parent": 22688
+          },
+          "identities": [
+            {
+              "pid": 22688,
+              "created": 1793125907.4092956,
+              "parent": 56744
+            },
+            {
+              "pid": 57520,
+              "created": 1793125907.4236844,
+              "parent": 22688
+            }
+          ],
+          "taskkill_returncode": 0,
+          "no_running_instance": false,
+          "access_denied": false,
+          "kernel_states": [
+            {
+              "pid": 22688,
+              "kernel_exited": true
+            },
+            {
+              "pid": 57520,
+              "kernel_exited": true
+            }
+          ],
+          "original_popen_exited": true,
+          "kernel_handles_closed": true
+        },
+        {
+          "trial": 3,
+          "mode": "base",
+          "original_pid": 59000,
+          "ready_process": {
+            "pid": 59000,
+            "parent": 56744
+          },
+          "identities": [
+            {
+              "pid": 59000,
+              "created": 1793125907.8219624,
+              "parent": 56744
+            }
+          ],
+          "taskkill_returncode": 0,
+          "no_running_instance": false,
+          "access_denied": false,
+          "kernel_states": [
+            {
+              "pid": 59000,
+              "kernel_exited": true
+            }
+          ],
+          "original_popen_exited": true,
+          "kernel_handles_closed": true
+        },
+        {
+          "trial": 4,
+          "mode": "base",
+          "original_pid": 61632,
+          "ready_process": {
+            "pid": 61632,
+            "parent": 56744
+          },
+          "identities": [
+            {
+              "pid": 61632,
+              "created": 1793125908.1847355,
+              "parent": 56744
+            }
+          ],
+          "taskkill_returncode": 0,
+          "no_running_instance": false,
+          "access_denied": false,
+          "kernel_states": [
+            {
+              "pid": 61632,
+              "kernel_exited": true
+            }
+          ],
+          "original_popen_exited": true,
+          "kernel_handles_closed": true
+        }
+      ],
+      "production_processes_touched": false
+    },
+    "native_probe_sha256": "0dd104a4edd05cb2e1d0e94cd4c696ebff3dc563e664225f775a07a401c0fbf4",
+    "error_reproduced": false,
+    "qualified_fact": "All3 venv invocations contain distinct launcher+Python child; both base-executable invocations are a single process with marker PID equal to Popen PID.",
+    "candidate": "Fixture-only use existing sys._base_executable or sys.executable convention for intended single-process identity sleeper. Production taskkill nonzero error handling and all identity refusal guards unchanged.",
+    "existing_pattern": "tests/hermes_cli/test_venv_holder_windows_live.py::test_foreign_python_not_detected",
+    "limitation": "Does not prove exact CI error cause or qualify production tree-shutdown race. Native hosted CI pending; no retry/reroll performed.",
+    "validation": {
+      "ruff": "PASS",
+      "ruff_format": "Legacy baseline is not formatter-clean; unrelated whole-file formatting removed. Not a required gate.",
+      "diff_check": "PASS",
+      "candidate_only_health": {
+        "base": "6719dd6a01953b015e80402ff49648d624f6bdff",
+        "blocking": 0,
+        "advisory": 0,
+        "status": "PASS"
+      },
+      "actual_pr_base_health": {
+        "base": "e5dd0631b836d990a4b3d4021dd507d53b433d90",
+        "status": "FAIL inherited HX011 only in earlier service fixture, already corrected by root ad3 on current combined d127; no taskkill fixture finding",
+        "combined_branch_rerun_required": true
+      }
+    },
+    "foreign_process_scope": "Existing foreign-process skip predicate now inspects the actual spawned executable proc.args[0], matching the base-interpreter selection; identity/refusal assertions unchanged."
+  }
+}

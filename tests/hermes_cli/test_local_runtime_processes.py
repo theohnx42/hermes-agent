@@ -174,7 +174,9 @@ def test_failed_setup_never_runs_child_and_releases_handles(tmp_path, monkeypatc
 
     def assign(job, proc):
         children.append(proc)
-        assert psutil.Process(proc.pid).status() == psutil.STATUS_STOPPED
+        # Keep the exact suspended-state requirement, allowing only a bounded
+        # observation window before the existing no-execution/kernel checks.
+        assert _wait(lambda: psutil.Process(proc.pid).status() == psutil.STATUS_STOPPED, timeout=2)
         assert not marker.exists()
         # Query the actual kernel object, not implementation source/constants.
         limits = processes._ExtendedLimits()

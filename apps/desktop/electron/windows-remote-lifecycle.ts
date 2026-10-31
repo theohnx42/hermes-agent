@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 
-import { resolveReadyTimeoutMs } from './remote-lifecycle'
+import { parseRemoteProfileListing } from './connection-registry'
+import { listRemoteHermesProfiles, readRemoteInstallId, resolveReadyTimeoutMs } from './remote-lifecycle'
 import { WINDOWS_CHECKOUT_LOCK_PS, WINDOWS_MARKER_JUDGE_PS } from './remote-update-marker-programs'
 import { assertBootstrapNotSuperseded, redactSecrets, SSH_ERROR } from './ssh-connection'
 
@@ -243,7 +244,59 @@ const TRANSPORT_KINDS = new Set([
   SSH_ERROR.UNREACHABLE
 ])
 
-async function detectRemotePlatform(ssh, explicitHermesPath = '') {
+// Metadata inventory must work without locating or launching a Hermes runtime.
+function windowsProfileInventoryScript() {
+  return [
+    '$ProgressPreference="SilentlyContinue"',
+    '$ErrorActionPreference="Stop"',
+    'function Assert-NoReparse([string]$candidate,[bool]$allowMissing=$false){',
+    'if([string]::IsNullOrWhiteSpace($candidate)){return}',
+    '$current=[IO.Path]::GetFullPath($candidate);$first=$true',
+    'while($true){',
+    'try{$item=Get-Item -LiteralPath $current -Force -ErrorAction Stop}catch [Management.Automation.ItemNotFoundException]{if(-not $allowMissing -and $first){throw "Path was not found: $candidate"};$parent=[IO.Path]::GetDirectoryName($current);if(-not $parent -or $parent -eq $current){break};$current=$parent;$first=$false;continue}',
+    'if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw "Path contains a link or reparse point: $current"}',
+    '$parent=$item.Parent.FullName;if(-not $parent -or $parent -eq $current){break};$current=$parent;$first=$false',
+    '}',
+    '}',
+    '$hermesHome=$env:HERMES_HOME',
+    'if(-not $hermesHome -or -not (Test-Path -LiteralPath $hermesHome -PathType Container)){$base=$env:LOCALAPPDATA;if(-not $base){$base=Join-Path $HOME "AppData\\Local"};$hermesHome=Join-Path $base ("hermes"+$env:HERMES_DATA_DIR_SUFFIX)}',
+    'Assert-NoReparse $hermesHome $true',
+    '$installRoot=$hermesHome;$parent=Split-Path -Parent $hermesHome',
+    'if((Split-Path -Leaf $parent) -ieq "profiles"){$installRoot=Split-Path -Parent $parent}',
+    'Assert-NoReparse $installRoot $true',
+    '$profilesDir=Join-Path $installRoot "profiles";Assert-NoReparse $profilesDir $true',
+    '$names=@();if(Test-Path -LiteralPath $profilesDir -PathType Container){foreach($entry in Get-ChildItem -LiteralPath $profilesDir -Directory -Force){Assert-NoReparse $entry.FullName $false;$names+=$entry.Name}}',
+    '$identity=Join-Path $installRoot "install_id";Assert-NoReparse $identity $true',
+    '$id="";if(Test-Path -LiteralPath $identity -PathType Leaf){$id=[IO.File]::ReadAllText($identity);Assert-NoReparse $identity $false}',
+    '[ordered]@{os="Windows";arch=$env:PROCESSOR_ARCHITECTURE;profiles=@($names);installId=$id}|ConvertTo-Json -Compress'
+  ].join('\r\n')
+}
+
+async function readWindowsRemoteProfileInventory(ssh) {
+  const lines = stripPowerShellNoise(await ssh.exec(powerShellStdinCommand(), {
+    stdinData: `${encodedPowerShell(windowsProfileInventoryScript())}\r\n`
+  }))
+
+  const data = JSON.parse(lines[lines.length - 1] || 'null')
+
+  if (data?.os !== 'Windows' || !Array.isArray(data.profiles) || data.profiles.some(name => typeof name !== 'string') || typeof data.installId !== 'string') {
+    throw new Error('Windows profile inventory did not return the expected metadata JSON.')
+  }
+
+  const id = data.installId.replace(/^\uFEFF/, '').trim().toLowerCase()
+
+  return { os: 'Windows', profiles: parseRemoteProfileListing(data.profiles.join('\n')), installId: /^[0-9a-f]{32}$/.test(id) ? id : undefined }
+}
+
+async function readRemoteProfileInventory(ssh, explicitHermesPath = '') {
+  const platform = await detectRemotePlatform(ssh, explicitHermesPath, true)
+
+  if (platform.os === 'Windows') {return platform}
+
+  return { profiles: await listRemoteHermesProfiles(ssh), installId: await readRemoteInstallId(ssh) }
+}
+
+async function detectRemotePlatform(ssh, explicitHermesPath = '', metadataOnly = false) {
   try {
     const output = (await ssh.exec('uname -s; uname -m')).trim().split('\n')
 
@@ -260,7 +313,7 @@ async function detectRemotePlatform(ssh, explicitHermesPath = '') {
   }
 
   try {
-    return await probeWindowsRemote(ssh, explicitHermesPath)
+    return metadataOnly ? await readWindowsRemoteProfileInventory(ssh) : await probeWindowsRemote(ssh, explicitHermesPath)
   } catch (cause: any) {
     if (TRANSPORT_KINDS.has(cause?.kind)) {
       throw cause
@@ -846,8 +899,11 @@ export {
   powerShellCommand,
   probeWindowsRemote,
   psLiteral,
+  readRemoteProfileInventory,
+  readWindowsRemoteProfileInventory,
   reusableWindowsLock,
   stripPowerShellNoise,
   terminateOwnedWindowsDashboardForUpdate,
-  validLock
+  validLock,
+  windowsProfileInventoryScript
 }

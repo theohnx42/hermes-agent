@@ -1,0 +1,68 @@
+{
+  "recorded_at": "2026-10-26T00:04:23.051418+00:00",
+  "scope": "Windows SSH profile inventory source candidate; no Desktop activation",
+  "preimage": "715d09c3d4789d0cad9106b210c334b3ae74ff93",
+  "source_sha256": {
+    "apps/desktop/electron/main.ts": "75a70156feeebe9c5bcc6f62991ac1d1ccf4564c82a19dcb2349dead4a9167ed",
+    "apps/desktop/electron/windows-remote-lifecycle.ts": "6c00d4ffe728ac8fa3f11cf255402e1183cfd73ecb4388277893abe180366d7d",
+    "apps/desktop/electron/remote-profile-inventory.test.ts": "b509498f83eb03fc0f8489da322f1bf0d71d56006e62b235f248229be897c42f"
+  },
+  "independent_regressions": {
+    "files": 3,
+    "passed": 133,
+    "skipped": 2,
+    "seconds": 7.39,
+    "focused_passed": 8,
+    "runner": "existing Vitest, isolated node config; normal Desktop config unavailable due missing @rolldown/plugin-babel; no installs"
+  },
+  "red_base": {
+    "result": "old actual inventory consumer fails roster assertion; candidate passes",
+    "log_sha256": "378d59a2f2c4f91dd7ea5abb54df43f4c5e630b3ad18370f3856b037c8801969"
+  },
+  "native_fixture": {
+    "node": "NIGHTFALL",
+    "route": "mesh-ssh nightfall -> nightfall-lan",
+    "exit_code": 0,
+    "seconds": 0.779607197,
+    "checks": [
+      "empty",
+      "single/root identity",
+      "profile-pinned identity",
+      "junction refusal"
+    ],
+    "runtime_executed": false,
+    "fixture_sha256": "eef6f57337c1516104a6893454c10d35ec855f4e2c3b8338269d53ff75e9011b",
+    "temporary_only": true,
+    "transport_payload_sha256": "9b9cbc692ac3f133a911eb30746074c2ee4803202d05944e59a3273b34fb3b84",
+    "program_sha256": "4aca9cd93a1e6a090e22456200ba90ce269b826f8fca0e635905419620edd902"
+  },
+  "native_existing_inventory": {
+    "node": "NIGHTFALL",
+    "exit_code": 0,
+    "seconds": 0.948580876,
+    "raw_directory_count": 19,
+    "includes": [
+      "condor",
+      "grokbot",
+      "codex",
+      "planning",
+      "eyes"
+    ],
+    "install_id_valid": true,
+    "runtime_executed": false
+  },
+  "independent_review": "capability_routes: no blocking defects",
+  "jev": {
+    "ok": false,
+    "provenance_status": "ERROR",
+    "live_provider_call": false,
+    "advice_accepted": false
+  },
+  "boundaries": [
+    "No app reload, UI action, gateway restart, source deployment, task install or provider turn",
+    "POSIX path guards and default lifecycle runtime probe preserved",
+    "Draft stable base and fork main preserved",
+    "Preclaim source accepted but runtime adoption remains separate; HP1 HOLD retained"
+  ],
+  "lint": "Existing pre-commit found import ordering/braces/spacing; corrected with project ESLint; no bypass"
+}

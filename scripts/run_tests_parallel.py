@@ -46,10 +46,13 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import hashlib
+import itertools
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -615,6 +618,154 @@ _FLAKY_RESULTS: list[tuple[Path, str]] = []
 _flaky_lock = threading.Lock()
 
 
+
+def _timeout_log_stat(path: Path, device: int) -> os.stat_result:
+    value = path.lstat()
+    if (value.st_dev != device or stat.S_ISLNK(value.st_mode)
+            or getattr(value, 'st_file_attributes', 0) & 0x400):
+        raise OSError('linked, reparse or foreign-device path')
+    return value
+
+
+
+def _timeout_directory_entries(directory: Path, device: int, limit: int):
+    if not stat.S_ISDIR(_timeout_log_stat(directory, device).st_mode):
+        raise OSError('log ancestor is not a directory')
+    with os.scandir(directory) as entries:
+        return list(itertools.islice(entries, limit))
+
+
+def _timeout_phase_candidates(root: Path) -> tuple[list[tuple[Path, os.stat_result]], bool]:
+    device = root.lstat().st_dev
+    if not stat.S_ISDIR(_timeout_log_stat(root, device).st_mode):
+        raise OSError('temp root is not a directory')
+    pending, candidates, visited, omitted = [(root, 0)], [], 0, False
+    while pending and visited < 1024:
+        directory, depth = pending.pop()
+        try:
+            entries = _timeout_directory_entries(directory, device, 1024 - visited)
+        except OSError:
+            omitted = True
+            continue
+        visited += len(entries)
+        omitted |= visited >= 1024
+        for entry in entries:
+            path = Path(entry.path)
+            try:
+                value = _timeout_log_stat(path, device)
+                if stat.S_ISDIR(value.st_mode):
+                    if depth < 8:
+                        pending.append((path, depth + 1))
+                    else:
+                        omitted = True
+                elif entry.name == 'desktop-update-handoff.log' and path.parent.name == 'logs':
+                    if stat.S_ISREG(value.st_mode) and value.st_nlink == 1:
+                        candidates.append((path, value))
+                    else:
+                        omitted = True
+            except OSError:
+                omitted = True
+    candidates.sort(key=lambda item: item[1].st_mtime_ns, reverse=True)
+    return candidates[:8], omitted or bool(pending) or len(candidates) > 8
+
+
+def _timeout_phase_tail(path: Path, expected: os.stat_result, root: Path) -> str:
+    # Revalidate ancestors before opening; the handle must still name the same
+    # regular, single-link file. Never read a fixture-created link's destination.
+    path, root = Path(os.path.abspath(path)), Path(os.path.abspath(root))
+    try:
+        relative = path.relative_to(root)
+    except ValueError as exc:
+        raise OSError('log is outside the owned temp root') from exc
+    if len(relative.parts) > 10 or path.name != 'desktop-update-handoff.log':
+        raise OSError('log path is outside the bounded phase-log shape')
+    before = _timeout_log_stat(path, expected.st_dev)
+    if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+            or (before.st_dev, before.st_ino) != (expected.st_dev, expected.st_ino)):
+        raise OSError('log identity changed')
+    parent = path.parent
+    while True:
+        if not stat.S_ISDIR(_timeout_log_stat(parent, expected.st_dev).st_mode):
+            raise OSError('log ancestor is not a directory')
+        if parent == root:
+            break
+        parent = parent.parent
+    flags = (os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NOFOLLOW', 0)
+             | getattr(os, 'O_NONBLOCK', 0))
+    fd = os.open(path, flags)
+    with os.fdopen(fd, 'rb') as handle:
+        current = os.fstat(handle.fileno())
+        if (not stat.S_ISREG(current.st_mode) or current.st_nlink != 1
+                or (current.st_dev, current.st_ino) != (expected.st_dev, expected.st_ino)):
+            raise OSError('log identity changed')
+        start = max(0, current.st_size - 4096)
+        handle.seek(start)
+        data = handle.read(4096)
+        if start > 0:
+            # The first bytes may be the middle of a raw argument/stdout line.
+            data = data.partition(b'\n')[2]
+        elif data.startswith(b'\xef\xbb\xbf'):
+            data = data[3:]
+    return data.decode('utf-8', errors='replace').encode('utf-8')[:4096].decode('utf-8', errors='ignore')
+
+
+def _project_timeout_phases(text: str) -> str:
+    phases = (
+        ('claimed update marker ', 'marker-claimed'), ('hand-off start:', 'handoff-start'),
+        ('update marker names its custodian pid ', 'custodian-named'),
+        ('running: python ', 'update-running'),
+        ('update marker now names updater pid ', 'delegate-named'),
+        ('hermes update exit code:', 'update-exited'),
+        ('removed update marker (owned)', 'marker-released'),
+        ('a process still holds the checkout update lock; keeping the update marker', 'release-wait'),
+    )
+    lines = []
+    for line in text.splitlines():
+        if len(line.encode('utf-8')) > 512:
+            continue
+        match = re.match(r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})?) (.*)$', line)
+        if match:
+            for prefix, key in phases:
+                if match[2].startswith(prefix):
+                    lines.append(f'{match[1]} {key}')
+                    break
+    suffix = '[raw content and unrecognized/oversized lines omitted; absence is not proof]\n'
+    return '\n'.join(lines) + '\n' + suffix
+
+
+def _desktop_timeout_phase_output(file: Path, repo_root: Path, temproot: str) -> str:
+    try:
+        relative = file.absolute().relative_to(repo_root.absolute())
+    except ValueError:
+        return ''
+    if (relative.parent.as_posix() != 'tests/scripts/desktop_update'
+            or not re.fullmatch(r'test_desktop_update_windows_.*\.py', relative.name)):
+        return ''
+    root = Path(temproot)
+    output = '\n--- bounded desktop-update phase projection (8 logs, 4096-byte tails) ---\n'
+    try:
+        candidates, omitted = _timeout_phase_candidates(root)
+        for index, (path, value) in enumerate(candidates, 1):
+            identity = path.relative_to(root).as_posix().encode('utf-8', errors='surrogatepass')
+            label = f'phase-log {index}; path-sha256={hashlib.sha256(identity).hexdigest()[:12]}'
+            try:
+                output += f'\n[{label}; bounded tail, not a complete history]\n'
+                output += _project_timeout_phases(_timeout_phase_tail(path, value, root))
+            except OSError:
+                omitted = True
+        if omitted:
+            output += '\n[truncated or unsafe/unreadable paths omitted]\n'
+        if not candidates:
+            output += '[no eligible phase log found inside the owned temp root]\n'
+    except OSError:
+        output += '[phase logs unavailable]\n'
+    data = output.encode('utf-8')
+    if len(data) > 32768:
+        marker = '\n[phase projection truncated at 32768 bytes]\n'
+        return data[:32768 - len(marker)].decode('utf-8', errors='ignore') + marker
+    return output
+
+
 def _run_one_file_once(
     file: Path,
     pytest_args: list[str],
@@ -674,10 +825,12 @@ def _run_one_file_once(
         except (ProcessLookupError, PermissionError):
             pgid = None
 
+    timed_out = False
     try:
         output, _ = proc.communicate(timeout=file_timeout)
         rc = proc.returncode
     except subprocess.TimeoutExpired:
+        timed_out = True
         _kill_tree(proc, pgid=pgid)
         try:
             output, _ = proc.communicate(timeout=10)
@@ -705,7 +858,14 @@ def _run_one_file_once(
         # subprocess exits. More than 3000 of them fill the disk of the
         # runner over one suite. Permission fixtures leave read-only dirs
         # behind; make them writable and retry instead of skipping them.
-        _rmtree_force(temproot)
+        try:
+            if timed_out:
+                try:
+                    output += _desktop_timeout_phase_output(file, repo_root, temproot)
+                except Exception as exc:  # health: allow BLE001 -- optional diagnostics preserve rc124 without exposing exception data
+                    output += f'\n[timeout phase evidence unavailable: {type(exc).__name__}]\n'
+        finally:
+            _rmtree_force(temproot)
 
     if rc not in (0, 5) and not output.strip():
         output = f"pytest child exited {rc} (0x{rc & 0xffffffff:08x}) with no output: {file}\n"
