@@ -6,7 +6,10 @@ import subprocess
 import time
 import pytest
 from tests.installation_launcher_fixture import publish_fixture_launcher
-from tests.scripts.desktop_update.test_desktop_update_windows_marker import CLI, MARKER, SCRIPT, _creation_time, _dead_pid, _run, sleeper as sleeper
+from tests.scripts.desktop_update import test_desktop_update_windows_marker as _fixture_module
+from tests.scripts.desktop_update.test_desktop_update_windows_marker import CLI, MARKER, SCRIPT, _creation_time, _dead_pid, _run
+
+sleeper = _fixture_module.sleeper
 
 
 @pytest.mark.platforms('windows')

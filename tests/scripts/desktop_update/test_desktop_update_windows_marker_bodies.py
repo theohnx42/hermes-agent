@@ -4,7 +4,10 @@ from pathlib import Path
 import subprocess
 import time
 import pytest
-from tests.scripts.desktop_update.test_desktop_update_windows_marker import MARKER, _BODIES, _creation_time, _run, sleeper as sleeper
+from tests.scripts.desktop_update import test_desktop_update_windows_marker as _fixture_module
+from tests.scripts.desktop_update.test_desktop_update_windows_marker import MARKER, _BODIES, _creation_time, _run
+
+sleeper = _fixture_module.sleeper
 
 
 @pytest.mark.platforms('windows')
