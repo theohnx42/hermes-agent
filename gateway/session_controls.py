@@ -170,6 +170,7 @@ class AuthorityConnection:
     def handlers(self):
         """Method → handler for every verb ``dispatch`` serves outside the group controls; each
         name is declared in ``tui_gateway/contracts`` (``METHODS`` or ``CANONICAL_METHODS``)."""
+        from gateway.session_control_viewer import resume_or_controls
         handlers = {'session.create': self.create, 'ping': self.ping, 'runtime.describe': self.describe,
                     'commands.catalog': self.command_catalog, 'complete.slash': self.slash_completions,
                     'plugins.list': self.plugins_list, 'command.observe': self.command_observe,
@@ -185,7 +186,7 @@ class AuthorityConnection:
                     'worker.register': self.worker_register, 'worker.adopt': self.worker_adopt,
                     'worker.persist': self.worker_persist,
                     'setup.status': self.setup_status, 'setup.runtime_check': self.setup_runtime_check,
-                    'session.resume': self.resume, 'session.detach': self.detach,
+                    'session.resume': partial(resume_or_controls, self), 'session.detach': self.detach,
                     'prompt.submit': self.submit,
                     'prompt.receipt': self.receipt, 'prompt.cancel': self.cancel,
                     'prompt.resolve_unknown': self.resolve_unknown,
@@ -210,7 +211,6 @@ class AuthorityConnection:
         from gateway.session_llm_oneshot import handlers as oneshot_handlers
         handlers.update(oneshot_handlers(self))
         from gateway.session_images import attach_bytes
-        from functools import partial
         handlers['image.attach_bytes'] = partial(attach_bytes, self)
         from gateway.session_complete_path import complete_path
         handlers['complete.path'] = partial(complete_path, self)
@@ -284,13 +284,8 @@ class AuthorityConnection:
         original_params = dict(params)
         contract = contract or METHODS.get(method)
         authority = self.authority
-        if (isinstance(ref.session_id, str) and ref.session_id and not getattr(authority, 'retiring', False)
-                and ref.profile_id == getattr(authority, 'profile_id', None)
-                and ref.session_id not in getattr(authority, 'sessions', {ref.session_id: None})):
-            # A first read of a session recovery never restored: its compression catch-up (#140060)
-            # commits in a worker here, so the handler's synchronous restore only reads.
-            from gateway.session_local_adoption import adopt_before_restore
-            await adopt_before_restore(authority, ref.session_id)
+        from gateway.session_control_viewer import restore_before_dispatch
+        await restore_before_dispatch(authority, ref, method, params)
         handlers = self.handlers()
         try:
             from gateway.session_group_controls import GROUP_METHODS, dispatch_group_control
@@ -498,7 +493,7 @@ class AuthorityConnection:
         from gateway.session_skin import resolved_skin
         return {'instance_id': self.authority.instance_id, 'profile_id': self.authority.profile_id,
                 'authority_epoch': self.authority.epoch,
-                'capabilities': ['durable-admission-v1', 'event-replay-v1', 'local-cli-create-v1', 'acp-editor-policy-v1', 'acp-session-mcp-v1'],
+                'capabilities': ['durable-admission-v1', 'event-replay-v1', 'local-cli-create-v1', 'acp-editor-policy-v1', 'acp-session-mcp-v1', 'control-only-viewer-v1'],
                 'session_create': {'sources': sorted(SURFACES),
                                    'parameters': sorted(CREATE_FIELDS | {'title'})},
                 # Main's ``gateway.ready.skin``: the canonical client's own ready carries it.

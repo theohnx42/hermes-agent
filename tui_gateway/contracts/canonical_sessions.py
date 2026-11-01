@@ -72,6 +72,8 @@ class CanonicalResumeParams(ProfileParams):
     # A renderer (the Ink TUI) asks for main's display projection of the same rows
     # (``tui_gateway.session_history._history_to_messages``) as ``display_messages``.
     display_projection: bool = False
+    control_only: bool = False
+    admission_id: str | None = None
 
 
 class CanonicalSessionHandle(Result):
@@ -134,9 +136,21 @@ class CanonicalSnapshotInfo(SessionInventoryFields):
     config_warning: str | None = None
 
 
+class CanonicalControlProof(Result):
+    version: Literal[1]
+    admission_id: str
+    profile_id: str
+    session_id: str
+    authority_epoch: int
+    execution_generation: int
+    admitted_input_sha256: str
+
+
 class CanonicalSnapshot(Result):
     session_id: str
     stored_session_id: str
+    control_only: bool | None = None
+    control_proof: CanonicalControlProof | None = None
     messages: list[TranscriptMessage]
     # Present only when ``display_projection`` was asked: the rows as main's TUI rendered them.
     display_messages: list[TranscriptMessage] | None = None

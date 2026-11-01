@@ -8560,6 +8560,51 @@
         "title": "CanonicalControlParams",
         "type": "object"
       },
+      "CanonicalControlProof": {
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "const": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "admission_id": {
+            "title": "Admission Id",
+            "type": "string"
+          },
+          "profile_id": {
+            "title": "Profile Id",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "authority_epoch": {
+            "title": "Authority Epoch",
+            "type": "integer"
+          },
+          "execution_generation": {
+            "title": "Execution Generation",
+            "type": "integer"
+          },
+          "admitted_input_sha256": {
+            "title": "Admitted Input Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "admission_id",
+          "profile_id",
+          "session_id",
+          "authority_epoch",
+          "execution_generation",
+          "admitted_input_sha256"
+        ],
+        "title": "CanonicalControlProof",
+        "type": "object"
+      },
       "CanonicalCorrectionAck": {
         "additionalProperties": false,
         "properties": {
@@ -9843,6 +9888,23 @@
             "default": false,
             "title": "Display Projection",
             "type": "boolean"
+          },
+          "control_only": {
+            "default": false,
+            "title": "Control Only",
+            "type": "boolean"
+          },
+          "admission_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Admission Id"
           }
         },
         "title": "CanonicalResumeParams",
@@ -10655,6 +10717,29 @@
           "stored_session_id": {
             "title": "Stored Session Id",
             "type": "string"
+          },
+          "control_only": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Control Only"
+          },
+          "control_proof": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalControlProof"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "messages": {
             "items": {
