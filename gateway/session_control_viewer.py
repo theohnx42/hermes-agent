@@ -76,9 +76,12 @@ def _unique_continuations(conn, db, chain):
             raise _unavailable()
 
 
-def _lineage(conn, db, ref):
+def _lineage(conn, db, ref, physical_session_id=None):
     # Reuse the store's verified continuation selection on THIS read-only transaction.
-    target = db._compression_tip_on(conn, ref.session_id)
+    seed = physical_session_id if physical_session_id is not None else ref.session_id
+    if not isinstance(seed, str) or not seed or len(seed) > 256:
+        raise _unavailable()
+    target = db._compression_tip_on(conn, seed)
     chain, seen = [], set()
     while target:
         if target in seen or len(chain) >= _LINEAGE_LIMIT:
@@ -92,6 +95,8 @@ def _lineage(conn, db, ref):
             raise _unavailable()
         row = dict(row)
         chain.append(target)
+        if physical_session_id is not None and target == seed:
+            break
         if db._is_explicit_fork_child_row(row, include_reset=True):
             break
         parent = row.get('parent_session_id')
@@ -101,7 +106,7 @@ def _lineage(conn, db, ref):
         if prior is None or prior[0] != 'compression':
             break
         target = parent
-    if ref.session_id not in chain:
+    if seed not in chain:
         raise _unavailable()
     ordered = tuple(reversed(chain))
     _unique_continuations(conn, db, ordered)
@@ -179,7 +184,27 @@ def _project_rows(conn, chain, mark, rows, admitted_text):
     return tuple(messages)
 
 
-def read_control_proof(db, ref, mark, admitted_text):
+def capture_physical_target(db, ref):
+    """Optional producer stamp: never reopen a store or block its ordinary execution."""
+    from hermes_state_local_lineage import local_physical_target
+    deadline = time.monotonic() + 1
+    try:
+        path = Path(db.db_path).absolute().as_uri() + '?mode=ro'
+        with closing(sqlite3.connect(path, uri=True, timeout=.2)) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.set_progress_handler(lambda: int(time.monotonic() > deadline), 1000)
+            conn.execute('BEGIN')
+            physical = local_physical_target(conn, ref.session_id)
+            physical = db._compression_tip_on(conn, physical)
+            exists = conn.execute('SELECT 1 FROM sessions WHERE id=?', (physical,)).fetchone()
+            if not exists or not isinstance(physical, str) or not physical or len(physical) > 256:
+                return None
+            return physical
+    except (sqlite3.Error, RuntimeStoreError, ValueError, TypeError, KeyError, AttributeError, IndexError):
+        return None
+
+
+def read_control_proof(db, ref, mark, admitted_text, physical_session_id=None):
     """A separate read-only SQLite snapshot with hard row/byte/lineage/time bounds."""
     if type(mark) is not int or mark < 0 or not isinstance(admitted_text, str) or not admitted_text:
         raise _unavailable()
@@ -191,11 +216,11 @@ def read_control_proof(db, ref, mark, admitted_text):
             conn.set_progress_handler(lambda: int(time.monotonic() > deadline), 1000)
             try:
                 conn.execute('BEGIN')
-                chain = _lineage(conn, db, ref)
+                chain = _lineage(conn, db, ref, physical_session_id)
                 rows = _read_rows(conn, chain, mark)
                 proof = _project_rows(conn, chain, mark, rows, admitted_text)
                 conn.execute('ROLLBACK')
-                if _lineage(conn, db, ref) != chain:
+                if _lineage(conn, db, ref, physical_session_id) != chain:
                     raise _unavailable()
             finally:
                 conn.set_progress_handler(None, 0)
@@ -211,6 +236,8 @@ def _claim(authority, ref, live, admission_id):
             or row['status'] != 'started' or row['owner_epoch'] != authority.epoch
             or not isinstance(stamp, dict) or stamp.get('admission_id') != admission_id
             or stamp.get('generation') != row['generation']
+            or not isinstance(stamp.get('physical_session_id'), str)
+            or not stamp['physical_session_id'] or len(stamp['physical_session_id']) > 256
             or authority.executing.get(ref.session_id) != row['generation']):
         raise _unavailable()
     return row, dict(stamp)
@@ -230,7 +257,7 @@ async def attach_controls(authority, actor, ref, admission_id):
     history = ()
     if prompts:
         history = await asyncio.to_thread(read_control_proof, authority.db, ref,
-                                          stamp.get('transcript_mark'), admitted_text)
+                                          stamp.get('transcript_mark'), admitted_text, stamp['physical_session_id'])
     if authority.sessions.get(ref.session_id) is not live:
         raise _unavailable()
     authority.authorize(actor, ref, 'session:read')

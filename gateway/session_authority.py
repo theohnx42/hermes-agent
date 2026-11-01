@@ -1073,13 +1073,23 @@ class SessionAuthority:
             live.rescan = False  # a _schedule from here on may not be visible to this claim's read
             # The row these checks validated, never whichever is first when the write runs: a
             # cancellation commits from a worker thread and can advance the FIFO at any point.
-            row = await tracked_write(self, partial(claim_session_input, self.db, epoch=self.epoch,
-                                                    session_id=ref.session_id, _guard=self._admission_gate(),
-                                                    head=first['admission_id'] if first is not None else None),
-                                      then=partial(self._stamp_claim, ref, live))
+            row = await tracked_write(self,
+                partial(self._claim_with_control_target, ref,
+                    partial(claim_session_input, self.db, epoch=self.epoch,
+                            session_id=ref.session_id, _guard=self._admission_gate(),
+                            head=first['admission_id'] if first is not None else None)),
+                then=partial(self._stamp_claim, ref, live))
             # Input scheduled while this claim's transaction ran may postdate its read: re-read
             # instead of letting the drain exit idle over a committed admission.
             return (False if row is None and live.rescan else row), first
+
+    def _claim_with_control_target(self, ref, claim):
+        """Worker-side optional proof capture, still tracked through the loop-side stamp."""
+        row = claim()
+        if row:
+            from gateway.session_control_viewer import capture_physical_target
+            row['physical_session_id'] = capture_physical_target(self.db, ref)
+        return row
 
     def _stamp_claim(self, ref, live, row):
         """The claim's execution stamp, in the same tracked task as its commit: no observer (or
@@ -1091,7 +1101,8 @@ class SessionAuthority:
                     'admission_id': row['admission_id']}
                 self.executing[ref.session_id] = row['generation']
                 live.control_claim = dict(admission_id=row['admission_id'], generation=row['generation'],
-                                          transcript_mark=row.get('transcript_mark'))
+                                          transcript_mark=row.get('transcript_mark'),
+                                          physical_session_id=row.get('physical_session_id'))
                 from gateway.session_automation import admission_display
                 live.event_stream.publish(ref.session_id, admission_display(row.get('payload') or {}),
                                           event_type='message.start')
