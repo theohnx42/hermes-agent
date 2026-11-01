@@ -5001,6 +5001,8 @@ export interface CanonicalCreateParams {
 export interface CanonicalSnapshot {
   session_id: string
   stored_session_id: string
+  control_only?: boolean | null
+  control_proof?: CanonicalControlProof | null
   messages: TranscriptMessage[]
   display_messages?: TranscriptMessage[] | null
   message_count: number
@@ -5016,6 +5018,15 @@ export interface CanonicalSnapshot {
   info: CanonicalSnapshotInfo
   pending_connection?: ConnectionRequestPayload | null
   todo_state?: TodoState | null
+}
+export interface CanonicalControlProof {
+  version: 1
+  admission_id: string
+  profile_id: string
+  session_id: string
+  authority_epoch: number
+  execution_generation: number
+  admitted_input_sha256: string
 }
 export interface CanonicalPendingAdmission {
   admission_id: string
@@ -5095,6 +5106,8 @@ export interface CanonicalResumeParams {
   omit_messages?: boolean
   cols?: number | null
   display_projection?: boolean
+  control_only?: boolean
+  admission_id?: string | null
 }
 export interface CanonicalListParams {
   profile?: string | null
