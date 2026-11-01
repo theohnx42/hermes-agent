@@ -14,13 +14,15 @@ import time
 import uuid
 
 from gateway.session_contract import CANONICAL_GATEWAY_PROTOCOL, SubscriptionSnapshot
+from hermes_state_compression import _CHAIN_CAP
 from hermes_state_runtime import RuntimeStoreError, get_session_admission
 
 CONTROL_VIEWER_CAPABILITY = 'control-only-viewer-v1'
 _PROOF_ROWS = 256
 _PROOF_BYTES = 512 * 1024
 _FIELD_BYTES = 128 * 1024
-_LINEAGE_LIMIT = 64
+_LINEAGE_LIMIT = _CHAIN_CAP
+_FANOUT_LIMIT = 64
 
 
 def control_requested(params):
@@ -62,11 +64,11 @@ def _unavailable():
 def _unique_continuations(conn, db, chain):
     for parent, expected in pairwise(chain):
         rows = conn.execute(
-            'SELECT id,source, CASE WHEN length(CAST(model_config AS BLOB))<=? '
+            'SELECT id,parent_session_id,source, CASE WHEN length(CAST(model_config AS BLOB))<=? '
             'THEN model_config END model_config, length(CAST(model_config AS BLOB)) config_bytes '
             'FROM sessions WHERE parent_session_id=? LIMIT ?',
-            (_FIELD_BYTES, parent, _LINEAGE_LIMIT + 1)).fetchall()
-        if len(rows) > _LINEAGE_LIMIT or any((row['config_bytes'] or 0) > _FIELD_BYTES for row in rows):
+            (_FIELD_BYTES, parent, _FANOUT_LIMIT + 1)).fetchall()
+        if len(rows) > _FANOUT_LIMIT or any((row['config_bytes'] or 0) > _FIELD_BYTES for row in rows):
             raise _unavailable()
         eligible = [row['id'] for row in rows if row['source'] != 'tool'
                     and not db._is_explicit_fork_child_row(dict(row), include_reset=True)]

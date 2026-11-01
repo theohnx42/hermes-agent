@@ -215,3 +215,30 @@ def test_compacted_intervening_user_boundary_cannot_disappear(transcript):
     proof = read_control_proof(db, ref, 0, 'actual admitted input')
     assert proof[-1]['message_uid'] == 'boundary'
     assert proof[-1]['content'] == 'later operator input'
+
+
+def test_linear_compression_chain_is_not_limited_by_child_fanout(transcript):
+    db, ref = transcript
+    append_turn(db)
+    parent = 'session'
+    for index in range(70):
+        child = f'continuation-{index}'
+        db.create_session(child, source='telegram', parent_session_id=parent)
+        db._execute_write(lambda conn, prior=parent: conn.execute(
+            "UPDATE sessions SET end_reason='compression', ended_at=1 WHERE id=?", (prior,)))
+        parent = child
+    proof = read_control_proof(db, ref, 0, 'actual admitted input')
+    assert [row['message_uid'] for row in proof] == ['actual-user', 'actual-call-message']
+
+
+def test_copied_fork_marker_does_not_hide_a_continuation(transcript):
+    db, _ = transcript
+    append_turn(db)
+    db.create_session('continuation', source='telegram', parent_session_id='session',
+                      model_config={'_branched_from': 'historical-parent'})
+    db.create_session('actual-fork', source='telegram', parent_session_id='session',
+                      model_config={'_branched_from': 'session'})
+    db._execute_write(lambda conn: conn.execute(
+        "UPDATE sessions SET end_reason='compression', ended_at=1 WHERE id='session'"))
+    proof = read_control_proof(db, SessionRef('profile', 'continuation'), 0, 'actual admitted input')
+    assert [row['message_uid'] for row in proof] == ['actual-user', 'actual-call-message']
