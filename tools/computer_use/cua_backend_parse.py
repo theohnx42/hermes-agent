@@ -131,8 +131,10 @@ def _split_tree_text(full_text: str) -> tuple[str, str]:
     summary, _, tree = full_text.partition("\n")
     return summary, tree
 
-_MODIFIER_NAMES = frozenset({"cmd", "command", "shift", "option", "alt", "ctrl", "control", "fn"})
-_KEY_ALIASES = {"command": "cmd", "alt": "option", "control": "ctrl"}
+_MODIFIER_NAMES = frozenset({"cmd", "command", "shift", "option", "alt", "ctrl", "control", "fn", "win"})
+# Match the input guard's Windows aliases; otherwise win+r silently becomes r.
+_KEY_ALIASES = {"command": "cmd", "alt": "option", "control": "ctrl",
+                "windows": "win", "super": "win", "meta": "win"}
 
 def _parse_key_combo(keys: str) -> tuple[Optional[str], list[str]]:
     """Parse 'cmd+s' / 'ctrl-alt-t' into (key, modifiers); last non-modifier wins."""

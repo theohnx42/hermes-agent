@@ -38,7 +38,37 @@ def _bot_chat_tip(home: Path) -> str | None:
     db = SessionDB(db_path=home / 'state.db', read_only=True)
     try:
         row = db.get_session_by_title('Bot Chat')
-        return db.get_compression_tip(row['id']) if row else None
+        if row is None:
+            return None
+        tip = db.get_compression_tip(row['id'])
+        target = db.get_session(tip)
+        owner = (target or {}).get('chat_id') or tip
+        # A canonical /new keeps the creation id/title as the logical owner, but
+        # advances its existing receipt's physical target. Compression alone
+        # cannot follow that reset edge; pinning the old segment makes the
+        # authority correctly refuse admission_conflict before any admission.
+        from hermes_state_local import POLICY_PREFIX, local_receipt, local_lineage_owner
+        from hermes_state_runtime import RuntimeStoreError
+        with db._read_ctx() as conn:
+            bound = conn.execute('SELECT 1 FROM state_meta WHERE key=?',
+                                 (POLICY_PREFIX + owner,)).fetchone()
+        if not bound:
+            return tip  # unadopted historical CLI/compression path
+        receipt = local_receipt(db, owner)
+        entry = receipt.get('entry')
+        current = entry.get('session_id') if isinstance(entry, dict) else None
+        # A fresh LOCAL creation has one segment and no explicit lineage yet.
+        # Reset/compression receipts add the field; an explicit malformed value
+        # must still fail closed rather than taking this absent-field default.
+        lineage = receipt.get('lineage', [owner])
+        if (receipt.get('session_id') != owner or not isinstance(current, str)
+                or not isinstance(lineage, list) or current not in lineage
+                or not db.get_session(current)):
+            raise RuntimeStoreError('storage_unavailable')
+        with db._read_ctx() as conn:
+            if local_lineage_owner(conn, current) != owner:
+                raise RuntimeStoreError('storage_unavailable')
+        return current
     finally:
         db.close()
 

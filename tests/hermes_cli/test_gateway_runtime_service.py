@@ -550,3 +550,34 @@ def test_task_discovery_reads_localized_schtasks_output(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "_run", run)
     found = service.discover_existing_gateway_service(home, deadline=time.monotonic() + 5)
     assert found is not None and found.start_argv == ("schtasks.exe", "/Run", "/TN", name)
+
+
+@pytest.mark.parametrize("tamper", [None, "declaration", "wait", "exit", "extra"])
+def test_current_vendor_vbs_identity(tamper, tmp_path, monkeypatch):
+    """The actual producer must remain verifiable; mixed/extended scripts are refused."""
+    from hermes_cli import gateway_windows
+    from hermes_cli.gateway_runtime_service_identity import verify_windows_task
+    home = tmp_path / "profile"
+    home.mkdir()
+    monkeypatch.setattr(gateway_windows, "_resolve_detached_python",
+                        lambda _: (sys.executable, str(tmp_path), []))
+    monkeypatch.setattr(gateway_windows, "_gateway_run_argv",
+                        lambda *_: [sys.executable, "-m", "hermes_cli.main", "gateway", "run"])
+    script = gateway_windows._build_gateway_vbs_script(sys.executable, str(home), str(home), "")
+    replacements = {
+        "declaration": ("existing_pp, exitCode", "existing_pp"),
+        "wait": (", 0, True)", ", 0, False)"),
+        "exit": ("WScript.Quit exitCode", "WScript.Quit 0"),
+    }
+    if tamper in replacements:
+        script = script.replace(*replacements[tamper])
+    if tamper == "extra":
+        script += 'MsgBox "extra"\r\n'
+    path = home / "gateway.vbs"
+    path.write_text(script, encoding="utf-8")
+    xml = gateway_windows._build_scheduled_task_xml("Hermes_Gateway", path, "DOMAIN\\owner")
+    if tamper is None:
+        verify_windows_task(xml, home, "DOMAIN\\owner", "S-1-5-21-123")
+    else:
+        with pytest.raises(ValueError, match="service_identity_unverified"):
+            verify_windows_task(xml, home, "DOMAIN\\owner", "S-1-5-21-123")

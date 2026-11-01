@@ -762,7 +762,7 @@ _JOB_ARG_FIELDS = (("name", "name"), ("deliver", "deliver"), ("failure_deliver",
                    ("model", "model"), ("provider", "model_provider"), ("pinned", "pinned"),
                    ("monitor_script", "monitor_script"), ("monitor_url", "monitor_url"),
                    ("continuity", "continuity"), ("reasoning_effort", "reasoning_effort"),
-                   ("interpreter", "interpreter"))
+                   ("interpreter", "interpreter"), ("execution_profile", "execution_profile"))
 
 
 def _job_api_kwargs(args) -> dict[str, Any]:
@@ -777,7 +777,7 @@ _JOB_DETAIL_LINES = (
     ("no_agent", "  Mode: no-agent (script stdout delivered directly)"),
     ("continuity", "  Continuity: on (each run sees the previous run's output)"),
     ("workdir", "  Workdir: {}"),
-    ("interpreter", "  Python: {}"))
+    ("interpreter", "  Python: {}"), ("execution_profile", "  Executor profile: {}"))
 
 
 def _print_job_details(job_data: dict[str, Any]) -> None:
@@ -928,6 +928,16 @@ def cron_resume(args) -> int:
 
 
 def cron_notepad(args) -> int:
+    from cron.jobs import child_notepad_store
+    try:
+        with child_notepad_store(str(getattr(args, "job_id", "") or "")):
+            return _cron_notepad_bound(args)
+    except (ValueError, TypeError, KeyError):
+        print(color("Invalid run-bound cron store context.", Colors.RED))
+        return 1
+
+
+def _cron_notepad_bound(args) -> int:
     """Handle ``hermes cron notepad <job_id> [get|set|delete|list]`` (per-job durable KV).
 
     A running cron agent updates its own notepad via its terminal tool; the scheduler injects

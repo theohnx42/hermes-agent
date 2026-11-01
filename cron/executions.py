@@ -48,7 +48,8 @@ def _connect() -> sqlite3.Connection:
     from cron.jobs import _ensure_cron_dir
     from hermes_cli.sqlite_util import open_db
 
-    path = EXECUTIONS_FILE or (get_hermes_home().resolve() / "cron" / "executions.db")
+    from cron.jobs import get_cron_store_home
+    path = EXECUTIONS_FILE or (get_cron_store_home(get_hermes_home()) / "cron" / "executions.db")
     _ensure_cron_dir(path.parent)
     return open_db(path, db_label="cron/executions.db", synchronous_full=True, initialize=_initialize_schema)
 
@@ -384,6 +385,25 @@ def execution_owner_live(execution_id: str, job_id: str) -> bool:
     with _transaction() as conn:
         row = _recoverable_row(conn, execution_id, job_id)
     return row is not None and _row_owner_live(row)
+
+
+
+def execution_owner_verified(execution_id: str, job_id: str) -> bool:
+    """Positive admission proof; unlike recovery's conservative alive predicate, unknown refuses."""
+    row = get_execution(execution_id)
+    if row is None or row['job_id'] != job_id or row['status'] not in {'claimed', 'running'}:
+        return False
+    if row['process_id'] == _PROCESS_ID and row['pid'] == os.getpid():
+        return True
+    stored = row.get('process_started_at')
+    try:
+        current = _process_start_time(int(row['pid']))
+    except (TypeError, ValueError):
+        return False
+    if stored is None or current is None:
+        return False
+    from gateway.status import start_time_fingerprints_match
+    return start_time_fingerprints_match(stored, current)
 
 
 def settle_delivery_outcome(execution_id: str, outcome: str) -> bool:

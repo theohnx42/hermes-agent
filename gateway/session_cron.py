@@ -61,9 +61,60 @@ def _actor(authority, actor):
     return Principal(CRON_PRINCIPAL_ID, authority.profile_id, actor.capabilities, actor.transport_id)
 
 
+def _validate_params(params):
+    keys = set(params)
+    if keys not in ({'job_id', 'request_id', 'extra_prompt'},
+                    {'job_id', 'request_id', 'extra_prompt', 'store_profile'}):
+        raise RuntimeStoreError('invalid_params')
+    if (any(not isinstance(params[k], str) or not params[k] for k in ('job_id', 'request_id'))
+            or len(params['request_id']) > 256
+            or (params['extra_prompt'] is not None and not isinstance(params['extra_prompt'], str))):
+        raise RuntimeStoreError('invalid_params')
+    if 'store_profile' in params:
+        from cron.jobs import normalize_execution_profile
+        try:
+            if normalize_execution_profile(params['store_profile']) != params['store_profile']:
+                raise ValueError('noncanonical store profile')
+        except (ValueError, TypeError):
+            raise RuntimeStoreError('invalid_params') from None
+
+
+def _bound_job(authority, params):
+    """A target owner may execute only the persisted assignment of a live source claim."""
+    from cron.jobs import get_job, use_cron_store, execution_profile_home
+    if 'store_profile' not in params:
+        job = get_job(params['job_id'])
+        if job and job.get('execution_profile'):
+            raise RuntimeStoreError('invalid_params')  # every explicit assignment needs its source claim
+        return job
+    store = execution_profile_home(params['store_profile'])
+    from gateway.session_authorities import authority_for_home, require_serving
+    source = authority_for_home(authority.runner, store)
+    if source is None:
+        raise RuntimeStoreError('profile_mismatch')
+    require_serving(source)
+    with use_cron_store(store, bookkeeping=True):
+        job = get_job(params['job_id'])
+        if (job is None or not job.get('execution_profile')
+                or execution_profile_home(job['execution_profile']) != Path(authority.profile_id).resolve()
+                or not (store / 'cron' / 'executions.db').is_file()):
+            raise RuntimeStoreError('profile_mismatch')
+        from gateway.session_authorities import local_bots
+        target = next((bot for bot in local_bots(authority.runner)
+                       if bot.authority is authority and bot.name == job['execution_profile']), None)
+        if target is None or target.problem or target.retiring:
+            raise RuntimeStoreError('profile_mismatch')
+        from cron.executions import get_execution, execution_owner_verified
+        row = get_execution(params['request_id'])
+        if (row is None or row['job_id'] != job['id'] or row['status'] not in {'claimed', 'running'}
+                or not execution_owner_verified(params['request_id'], job['id'])):
+            raise RuntimeStoreError('cron_claim_unverified')
+        return job
+
+
 def _create(authority, actor, params):
-    from cron.jobs import get_job
     from gateway.session_local_recovery import local_identity, restore_local_session
+    from cron.jobs import execution_profile_home
     from gateway.session_policy import build_policy, bind_launch_key
     from gateway.run import _load_gateway_config
     from cron.scheduler import _load_cron_job_config
@@ -71,22 +122,24 @@ def _create(authority, actor, params):
     from gateway.session import SessionSource, SessionEntry
     from gateway.session_lifecycle import _now
 
-    if set(params) != {'job_id', 'request_id', 'extra_prompt'}:
-        raise RuntimeStoreError('invalid_params')
+    _validate_params(params)
     jid, request_id, extra = params['job_id'], params['request_id'], params['extra_prompt']
-    if (not isinstance(jid, str) or not jid or not isinstance(request_id, str)
-            or not request_id or len(request_id) > 256 or (extra is not None and not isinstance(extra, str))):
-        raise RuntimeStoreError('invalid_params')
     execution_id, request_id = request_id, cron_request_id(jid, request_id)
     sid = local_identity(authority.profile_id, actor.subject, request_id)
     if authority.db.get_session(sid) is not None:
-        return restore_local_session(authority, sid), request_id
+        ref = restore_local_session(authority, sid)
+        from gateway.session_local_recovery import local_adapter_map
+        frozen = json.loads(local_adapter_map(authority)[Platform.LOCAL].policies[sid].request_json)
+        if (frozen.get('store_profile') != params.get('store_profile')
+                or frozen['cron_job']['id'] != jid or frozen['extra_prompt'] != extra):
+            raise RuntimeStoreError('admission_conflict')
+        return ref, request_id
     if ':' in execution_id:
         # Fresh admissions only: ``cron:<job>:<execution>`` then splits at its one ``:`` after the
         # job. Ledger ids are hex, so only a hand-made id has one; an identity admitted before this
         # guard keeps its exact retry above, and run history files it by its stored policy.
         raise RuntimeStoreError('invalid_params')
-    job = get_job(jid)
+    job = _bound_job(authority, params)
     if job is None or job.get('no_agent'):
         raise RuntimeStoreError('not_found')
     config = _load_gateway_config()
@@ -96,7 +149,12 @@ def _create(authority, actor, params):
         launch['cwd'] = job['workdir']
     policy = build_policy(launch, config, private_secrets=private)
     policy = replace(policy, source='cron', platform='cron', model=_load_cron_job_config(job, jid, job.get('name') or jid).model,
-                     request_json=json.dumps({'cron_job': job, 'extra_prompt': extra, 'request_id': request_id}))
+                     request_json=json.dumps({'cron_job': job, 'extra_prompt': extra, 'request_id': request_id,
+                                              **({'store_profile': params['store_profile'],
+                                                  'execution_profile': job['execution_profile'],
+                                                  'store_home': str(execution_profile_home(params['store_profile'])),
+                                                  'execution_home': str(Path(authority.db.db_path).resolve().parent)}
+                                                 if 'store_profile' in params else {})}))
     policy = bind_launch_key(authority, sid, policy, None, config_secrets=private)
     from gateway.session_local_recovery import local_source
     source = local_source(authority, sid, actor.subject)
@@ -127,10 +185,7 @@ async def operation(authority, name, params, actor=None):
     # (CronExecutionUnknown pauses the job) on every restart that overlaps a cron run.
     if name == 'recover':
         from gateway.session_local_recovery import local_identity
-        if (set(params) != {'job_id', 'request_id', 'extra_prompt'}
-                or any(not isinstance(params[k], str) or not params[k] for k in ('job_id', 'request_id'))
-                or (params['extra_prompt'] is not None and not isinstance(params['extra_prompt'], str))):
-            raise RuntimeStoreError('invalid_params')
+        _validate_params(params)
         request_id = cron_request_id(params['job_id'], params['request_id'])
         sid = local_identity(authority.profile_id, actor.subject, request_id)
         from hermes_state_runtime import list_session_admissions
@@ -145,7 +200,8 @@ async def operation(authority, name, params, actor=None):
         from gateway.session_local_recovery import local_adapter_map
         policy = local_adapter_map(authority)[Platform.LOCAL].policies[sid]
         frozen = json.loads(policy.request_json)
-        if frozen['extra_prompt'] != params['extra_prompt']:
+        if (frozen['extra_prompt'] != params['extra_prompt']
+                or frozen.get('store_profile') != params.get('store_profile')):
             raise RuntimeStoreError('admission_conflict')
         state['job'] = frozen['cron_job']
         # The receipt a firer whose submit answer was lost polls, exactly as if it had arrived.
@@ -186,16 +242,18 @@ async def operation(authority, name, params, actor=None):
             # cancellation on the admission here means that window cannot lose it.
             _cancellations(authority).setdefault(row['admission_id'], threading.Event()).set()
         return {'ok': True}
-    result, flags = None, {}
+    result, flags, binding = None, {}, None
     if row['status'] == 'terminal':
         from gateway.session_results import admission_result
         saved = admission_result(authority.db, row['admission_id'])
         result = saved['result'].get('cron_result') if saved else None
         flags = (saved['result'].get('cron_job_flags') or {}) if saved else {}
+        binding = saved['result'].get('cron_execution_binding') if saved else None
         if result is None:
             result = [False, '', '', row.get('outcome') or 'unknown_execution']
     from cron.scheduler_liveness import owner_progress
     return {'status': row['status'], 'result': result, 'job_flags': flags,
+            **({'execution_binding': binding} if binding else {}),
             'progress_at': owner_progress.get(row['request_id'].rsplit(':', 1)[-1])}
 
 
@@ -216,14 +274,16 @@ def scheduler_execution_id(job_id, request_id):
     return request_id.removeprefix(cron_request_id(job_id, ''))
 
 
-def _run_identified(run_job, job, execution_id, **kwargs):
+def _run_identified(run_job, job, execution_id, *, require_live_claim=False, **kwargs):
     """``run_job`` inside this fire's cron identity (``ctx.current_cron_execution()``).
 
     The scheduler binds it in the FIRING thread, but the owner executes on its own loop, whose
     context never saw that binding; re-bind it here from the same ledger row, in the profile scope
     the caller entered (so the row and the profile name are this profile's)."""
     from cron.execution_identity import enter_cron_execution, exit_cron_execution
-    from cron.executions import get_execution
+    from cron.executions import get_execution, execution_owner_verified
+    if require_live_claim and not execution_owner_verified(execution_id, job['id']):
+        raise RuntimeStoreError('cron_claim_unverified')
     token = enter_cron_execution(job, execution_id, get_execution(execution_id) or {})
     try:
         return run_job(job, execution_id=execution_id, **kwargs)
@@ -255,14 +315,25 @@ async def execute(authority, ref, row, policy):
     token = bind_execution(authority, ref.session_id, job['id'], execution_id)
     try:
         db_path = await asyncio.to_thread(Path(authority.db.db_path).resolve)
-        with _profile_runtime_scope(db_path.parent):
+        from cron.jobs import use_cron_store, execution_profile_home
+        store = (execution_profile_home(data['store_profile'])
+                 if 'store_profile' in data else db_path.parent)
+        if ('execution_profile' in data
+                and (execution_profile_home(data['execution_profile']) != db_path.parent
+                     or data.get('execution_home') != str(db_path.parent)
+                     or data.get('store_home') != str(store))):
+            raise RuntimeStoreError('profile_mismatch')
+        with use_cron_store(store, bookkeeping='store_profile' in data), _profile_runtime_scope(db_path.parent):
             result = await asyncio.to_thread(_run_identified, run_job, job, execution_id,
+                                             require_live_claim='store_profile' in data,
                                              extra_prompt=data['extra_prompt'], cancel_event=cancel)
         # run_job stamps run-side verdicts on ITS job copy (quota hold, unreachable model); the
         # firing scheduler's bookkeeping reads them off its own dict, so they ride the result.
         flags = {key: job[key] for key in RUN_JOB_FLAGS if key in job}
+        binding = ({key: data[key] for key in ('store_profile', 'store_home', 'execution_profile', 'execution_home')}
+                   if 'store_profile' in data else {})
         authority.pending_results[row['admission_id']] = {
-            'result': {'final_response': result[2], 'cron_result': list(result), 'cron_job_flags': flags,
+            'result': {'cron_execution_binding': binding, 'final_response': result[2], 'cron_result': list(result), 'cron_job_flags': flags,
                        'failed': not result[0], 'completed': result[0]}, 'usage': {}}
         if not result[0]:
             raise RuntimeError(result[3] or 'cron execution failed')

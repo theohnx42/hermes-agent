@@ -11,6 +11,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import sys
 import time
 import unicodedata
 from pathlib import Path
@@ -24,6 +25,48 @@ if TYPE_CHECKING:
     from hermes_cli.kanban_db import Task
 
 _REMOVABLE_KINDS = ("scratch", "worktree")
+
+
+def workspace_path_style(path: str | None) -> str:
+    """Classify only the absolute path syntaxes relevant before dispatch.
+
+    This is lexical deliberately: :class:`pathlib.Path` uses the host flavour,
+    so a Windows path can otherwise appear relative on POSIX. A forward-slash
+    UNC form is still a Windows absolute path; it must not be treated as a
+    POSIX absolute path merely because it begins with ``//``.
+    """
+    raw_path = str(path or "").strip()
+    if not raw_path:
+        return "empty"
+    if len(raw_path) >= 3 and raw_path[0].isalpha() and raw_path[1] == ":" and raw_path[2] in "\\/":
+        return "windows_drive"
+    if raw_path.startswith(("\\\\", "//")):
+        components = raw_path[2:].replace("\\", "/").split("/")
+        if len(components) >= 2 and components[0] and components[1]:
+            return "windows_unc"
+    if raw_path.startswith("/"):
+        return "posix_absolute"
+    return "relative"
+
+
+def workspace_platform_compatibility_error(
+    task: Task, *, host_platform: Optional[str] = None,
+) -> Optional[str]:
+    """Return an unambiguous host/path mismatch before workspace creation.
+
+    ``pathlib.Path`` interprets paths using the host flavour, so a Windows drive
+    or UNC path would otherwise merely look relative on POSIX. This lexical
+    guard is deliberately narrow: normal resolution retains existence and
+    authorization checks for compatible paths.
+    """
+    raw_value = task["workspace_path"] if isinstance(task, sqlite3.Row) else task.workspace_path
+    path_style = workspace_path_style(raw_value)
+    is_windows = (host_platform or sys.platform).casefold().startswith("win")
+    if is_windows and path_style == "posix_absolute":
+        return "posix_absolute_path_on_windows"
+    if not is_windows and path_style in {"windows_drive", "windows_unc"}:
+        return "windows_absolute_path_on_non_windows"
+    return None
 
 
 def _path_key(path: Path | str | None) -> str:

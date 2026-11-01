@@ -86,6 +86,8 @@ class LiveSession:
     # Revision of the last ``session.control.update`` (gateway/session_control_actions.publish): a tool
     # completion republishes only when a tool actually moved the goal/loop/heartbeat state.
     control_revision: str = ""
+    # Current native claim fence; never persisted or projected as conversation history.
+    control_claim: dict | None = None
 
     def __post_init__(self):
         self.controls = PendingControls(self.event_stream)
@@ -320,7 +322,10 @@ class SessionAuthority:
                 raise RuntimeStoreError('not_found') from None
             raise
 
-    async def attach(self, actor, ref):
+    async def attach(self, actor, ref, *, control_only=False, admission_id=None):
+        if control_only:
+            from gateway.session_control_viewer import attach_controls
+            return await attach_controls(self, actor, ref, admission_id)
         self.authorize(actor, ref, 'session:read')
         from gateway.session_local_recovery import local_history, prepare_history
         prepared = await prepare_history(self, ref)  # the lineage read stays off the loop and the lock
@@ -334,16 +339,11 @@ class SessionAuthority:
         from gateway.session_queued_controls import pending_rows
         with live.event_stream.lock:
             handle = self._handle(ref)  # before the viewer joins: a delete committed meanwhile is not_found
-            subscription = next((key for key, member in live.subscribers.items()
-                                 if member == actor), None) or uuid.uuid4().hex
-            live.subscribers[subscription] = actor
+            from gateway.session_control_viewer import subscribe_viewer
+            subscription = subscribe_viewer(self, actor, ref, live)
             self.pending_closes.pop(ref.session_id, None)
             from tools.async_delegation import allow_for_session
             allow_for_session((self.profile_id, ref.session_id))  # a closed session's work may start again
-            transport = self.events.get(actor.transport_id)
-            if transport is not None:
-                live.event_stream.fanout.attach(transport)
-                live.event_stream.on_overflow = partial(self._retire_overflowed, ref.session_id)
             active_generation = handle.execution_generation if handle.execution_state == "running" else None
             prompts = live.controls.snapshot(ref.session_id, active_generation)
             epoch, sequence = live.event_stream.watermark()
@@ -1073,13 +1073,23 @@ class SessionAuthority:
             live.rescan = False  # a _schedule from here on may not be visible to this claim's read
             # The row these checks validated, never whichever is first when the write runs: a
             # cancellation commits from a worker thread and can advance the FIFO at any point.
-            row = await tracked_write(self, partial(claim_session_input, self.db, epoch=self.epoch,
-                                                    session_id=ref.session_id, _guard=self._admission_gate(),
-                                                    head=first['admission_id'] if first is not None else None),
-                                      then=partial(self._stamp_claim, ref, live))
+            row = await tracked_write(self,
+                partial(self._claim_with_control_target, ref,
+                    partial(claim_session_input, self.db, epoch=self.epoch,
+                            session_id=ref.session_id, _guard=self._admission_gate(),
+                            head=first['admission_id'] if first is not None else None)),
+                then=partial(self._stamp_claim, ref, live))
             # Input scheduled while this claim's transaction ran may postdate its read: re-read
             # instead of letting the drain exit idle over a committed admission.
             return (False if row is None and live.rescan else row), first
+
+    def _claim_with_control_target(self, ref, claim):
+        """Worker-side optional proof capture, still tracked through the loop-side stamp."""
+        row = claim()
+        if row:
+            from gateway.session_control_viewer import capture_physical_target
+            row['physical_session_id'] = capture_physical_target(self.db, ref)
+        return row
 
     def _stamp_claim(self, ref, live, row):
         """The claim's execution stamp, in the same tracked task as its commit: no observer (or
@@ -1090,6 +1100,9 @@ class SessionAuthority:
                     'authority_epoch': self.epoch, 'execution_generation': row['generation'],
                     'admission_id': row['admission_id']}
                 self.executing[ref.session_id] = row['generation']
+                live.control_claim = dict(admission_id=row['admission_id'], generation=row['generation'],
+                                          transcript_mark=row.get('transcript_mark'),
+                                          physical_session_id=row.get('physical_session_id'))
                 from gateway.session_automation import admission_display
                 live.event_stream.publish(ref.session_id, admission_display(row.get('payload') or {}),
                                           event_type='message.start')
@@ -1160,6 +1173,7 @@ class SessionAuthority:
             finally:
                 with live.event_stream.lock:
                     self.executing.pop(ref.session_id, None)
+                    live.control_claim = None
         except ManagedExecutionUnknown:
             with live.event_stream.lock:
                 live.event_stream.execution = {}

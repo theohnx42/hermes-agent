@@ -31,6 +31,10 @@ from pathlib import Path
 from hermes_constants import get_hermes_home
 from cron.constants import CLAIM_TTL_INACTIVITY_HEADROOM, FIRE_CLAIM_SKEW_SECONDS, FIRE_CLAIM_TTL_SECONDS
 from cron.env_settings import cron_env_setting
+from cron.execution_identity import (
+    normalize_execution_profile, execution_profile_home, cron_child_store_binding, child_notepad_store,
+    use_cron_store, get_cron_store_home, get_cron_output_dir,
+)
 from cron.jobs_invariants import _validate_job_mode_invariants
 from cron.scheduler_ownership import _claim_owner_is_dead
 from cron import store_health
@@ -81,6 +85,7 @@ def _ensure_croniter() -> bool:
 # Each profile owns its own cron store under its own HERMES_HOME, and a profile-scoped gateway runs that
 # profile's jobs under that same HERMES_HOME — so a job authored in profile `coder` lives in
 # `~/.hermes/profiles/coder/cron/jobs.json` and executes with `coder`'s `.env`, `config.yaml`, and skills.
+# An explicit execution_profile changes only the native executor; its source store remains here.
 # Do NOT change this to the default root: that re-breaks per-profile isolation. See also the dynamic
 # `_get_hermes_home()` / `_get_lock_paths()` resolution in cron/scheduler.py. See #4707.
 HERMES_DIR = get_hermes_home().resolve()
@@ -181,22 +186,6 @@ def _current_cron_store() -> _CronStorePaths:
     if home == HERMES_DIR:
         return live_constants
     return _CronStorePaths.for_dir(home / "cron")
-
-
-@contextlib.contextmanager
-def use_cron_store(home: str | Path):
-    """Route cron storage to ``home`` without mutating process globals."""
-    token = _cron_store_override.set(
-        _CronStorePaths.for_dir(Path(home).expanduser().resolve() / "cron"))
-    try:
-        yield
-    finally:
-        _cron_store_override.reset(token)
-
-
-def get_cron_output_dir() -> Path:
-    """Return the output directory for the active cron store context."""
-    return _current_cron_store().output_dir
 
 
 # Fallback stale-recovery window for a one-shot's running-claim when HERMES_CRON_TIMEOUT=0
@@ -1740,6 +1729,7 @@ def _normalize_reasoning_effort(value: Any) -> Optional[str]:
 # Normalizers for create_job (all fields) / update_job (present fields). Invalid values raise BEFORE
 # storing.
 _CREATE_FIELD_NORMALIZERS: dict[str, Callable[[Any], Any]] = {
+    "execution_profile": normalize_execution_profile,
     "model": _normalize_job_optional_text,
     "provider": _normalize_job_optional_text,
     "base_url": _normalize_base_url,
@@ -1761,6 +1751,7 @@ _UPDATE_FIELD_NORMALIZERS: dict[str, Callable[[Any], Any]] = {
     "monitor_url": _normalize_job_optional_text,
     "interpreter": _normalize_job_optional_text,
     "reasoning_effort": _normalize_reasoning_effort,
+    "execution_profile": normalize_execution_profile,
 }
 
 
@@ -1811,6 +1802,7 @@ def create_job(
     paused_reason: Optional[str] = None,
     pinned: bool = False,
     interpreter: Optional[str] = None,
+    execution_profile: Optional[str] = None,
 ) -> dict[str, Any]:
     """Create a new cron job and return the stored record.
 
@@ -1860,6 +1852,9 @@ def create_job(
         or (f["script"] if f["no_agent"] else None)
         or "cron job"
     )
+    execution_profile = normalize_execution_profile(execution_profile)
+    if execution_profile is not None and f["no_agent"]:
+        raise ValueError("execution_profile requires an agent job")
     name = name or label_source[:50].strip()
     if pinned and not f["model"]:
         f["provider"], f["model"] = _main_model_pin()
@@ -1903,9 +1898,10 @@ def create_job(
         "enabled_toolsets": f["enabled_toolsets"],
         "workdir": f["workdir"],
     }
+    if execution_profile is not None:
+        job["execution_profile"] = execution_profile
     # Optional keys are persisted only when explicitly set: an absent key falls back to global
-    # config (attach/reasoning) or to ``deliver`` (failure_deliver), byte-identical to pre-feature
-    # jobs.
+    # config (attach/reasoning) or to ``deliver`` (failure_deliver), byte-identical to pre-feature jobs.
     for key, value in (
         ("attach_to_session", normalized_attach), ("reasoning_effort", normalized_reasoning_effort),
         ("failure_deliver", f["failure_deliver"]), ("interpreter", f["interpreter"]),
@@ -2095,6 +2091,8 @@ def update_job(job_id: str, updates: dict[str, Any]) -> Optional[dict[str, Any]]
         _normalize_job_updates(job, updates)
         _apply_pin_update(job, updates)
         updated = _apply_skill_fields({**job, **updates})
+        if updated.get("execution_profile") and updated.get("no_agent"):
+            raise ValueError("execution_profile requires an agent job")
         _reject_terminal_activation(job, updated, job_id)
         # Re-check on the MERGED record; scoped to changed fields so legacy records keep loading.
         if {"monitor_script", "monitor_url", "no_agent", "script"}.intersection(updates):

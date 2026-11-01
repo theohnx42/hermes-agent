@@ -2431,7 +2431,7 @@ class TestCaptureScreenshotPersistence:
 
 
 class TestBoundsScaleField:
-    def test_scale_reported_when_spaces_diverge(self, tmp_path, monkeypatch):
+    def test_desktop_extents_do_not_report_a_fake_scale(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
         from tools.computer_use.backend import CaptureResult, UIElement
         from tools.computer_use.tool import _capture_response
@@ -2443,8 +2443,9 @@ class TestBoundsScaleField:
                             elements=elems, app="chrome.exe",
                             window_title="", png_bytes_len=0)
         out = json.loads(_capture_response(cap))
-        assert out["bounds_scale"] == pytest.approx(3799 / 1455, abs=0.01)
-        assert f"~{out['bounds_scale']}x" in out["summary"]
+        assert out.get("bounds_scale") is None
+        assert "window-local screenshot pixels" in out["summary"]
+        assert "estimated scale" not in out["summary"]
 
     def test_no_scale_when_spaces_match(self):
         from tools.computer_use.backend import UIElement

@@ -891,12 +891,10 @@ def _delivery_main(args: list[str]) -> int:
 
 
 def _agent_home(agent: Any) -> str:
-    """The calling agent's OWN home (session-db derived), not ambient env."""
-    with contextlib.suppress(Exception):
-        db_path = getattr(getattr(agent, "_session_db", None), "db_path", None)
-        if db_path:
-            return str(Path(db_path).parent)
-    return _default_home()
+    """The caller's logical profile home, even with externally stored session DBs."""
+    from hermes_constants import get_agent_hermes_home
+
+    return str(get_agent_hermes_home(agent) or _default_home())
 
 
 def _session_title(agent: Any) -> str:

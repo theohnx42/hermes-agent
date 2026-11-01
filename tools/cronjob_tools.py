@@ -696,6 +696,7 @@ def _action_create(a: dict[str, Any]) -> str:
             monitor_url=_normalize_optional_job_value(a["monitor_url"]),
             # CLI-only lane: absent from CRONJOB_SCHEMA and the model dispatch (models don't pick models).
             reasoning_effort=a["reasoning_effort"], interpreter=a["interpreter"],
+            **({"execution_profile": a.get("execution_profile")} if a.get("execution_profile") is not None else {}),
             pinned=bool(a["pinned"]),
             failure_deliver=_resolve_cron_context_deliver(_normalize_deliver_param(a["failure_deliver"])),
             **({"paused": a["paused"], "paused_reason": a["paused_reason"]}
@@ -855,6 +856,8 @@ def _update_core_fields(job: dict[str, Any], a: dict[str, Any], updates: dict[st
     if a["reasoning_effort"] is not None:
         # CLI-only lane; update_job validates, empty string clears the pin.
         updates["reasoning_effort"] = a["reasoning_effort"]
+    if a.get("execution_profile") is not None:
+        updates["execution_profile"] = a.get("execution_profile")
     if a["interpreter"] is not None:
         # CLI-only lane like reasoning_effort; update_job trims, empty string clears.
         updates["interpreter"] = a["interpreter"]
@@ -1014,7 +1017,8 @@ def cronjob(
     paused: bool = False,
     paused_reason: Optional[str] = None,
     pinned: Optional[bool] = None,
-    interpreter: Optional[str] = None) -> str:
+    interpreter: Optional[str] = None,
+    execution_profile: Optional[str] = None) -> str:
     """Unified cron job management tool."""
     a = dict(locals())
     del a["task_id"]  # unused but kept for handler signature compatibility
@@ -1063,6 +1067,7 @@ Jobs run in a fresh session with no current-chat context, so prompts must be sel
     "parameters": {
         "type": "object",
         "properties": {
+            "execution_profile": {"type": "string", "description": "Existing profile to execute a job while its schedule, history and delivery remain in this profile; empty string clears on update."},
             "paused": {"type": "boolean", "description": "Create only: persist disabled atomically. Resume to schedule; explicit run remains available. Default false."},
             "paused_reason": {"type": "string", "description": "Create only: auditable reason; requires paused=true."},
             "action": {

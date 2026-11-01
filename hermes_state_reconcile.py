@@ -232,10 +232,13 @@ def _apply_additive_schema(path: Path, budget: _Budget | None = None) -> None:
     budget.check()
     with closing(connect_tracked(path, tracking_path=path, timeout=budget.busy_timeout(),
                                  isolation_level=None)) as conn:
-        _reapply_durability_barriers(conn)
         budget.arm(conn)
-        conn.execute('BEGIN IMMEDIATE')
         try:
+            _reapply_durability_barriers(conn)
+            # Best-effort barriers can swallow an interrupted SQLite VM. Check
+            # the same budget before BEGIN, which can itself be interrupted.
+            budget.check()
+            conn.execute('BEGIN IMMEDIATE')
             cursor = conn.cursor()
             apply_declared_schema(cursor)
             # Postcondition, still inside the transaction: every declared table/column resolves.

@@ -22,8 +22,11 @@ pytestmark = pytest.mark.platforms("windows")  # live taskkill-identity probes a
 
 
 def _spawn_sleeper(seconds: int = 60) -> subprocess.Popen:
+    # A Windows venv python.exe redirects to a second Python process.
+    # This fixture tests a single PID identity, so use the existing base-Python convention.
+    python = getattr(sys, "_base_executable", None) or sys.executable
     return subprocess.Popen(
-        [sys.executable, "-c", f"import time; time.sleep({seconds})"],
+        [python, "-c", f"import time; time.sleep({seconds})"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,
@@ -114,10 +117,10 @@ class TestPidIsHermesLive:
 
         proc = _spawn_sleeper()
         try:
-            # sys.executable in CI lives under a uv/hostedtoolcache path with
-            # no 'hermes' token; if the checkout path itself contains one this
+            # The spawned interpreter may live under a uv/hostedtoolcache path
+            # with no 'hermes' token; if its actual path contains one this
             # assertion is environment-dependent, so guard for it.
-            if "hermes" in sys.executable.lower():
+            if "hermes" in str(proc.args[0]).lower():
                 pytest.skip("interpreter path names hermes; probe would match")
             assert pid_is_hermes(proc.pid) is False
         finally:

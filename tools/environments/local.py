@@ -1,6 +1,7 @@
 """Local execution environment — spawn-per-call with session snapshot."""
 
 import contextlib
+import json
 import logging
 import ntpath
 import os
@@ -299,6 +300,12 @@ def _finalize_child_env(env: dict) -> dict:
     Kanban scrub. Returns the (possibly new) dict."""
     _apply_profile_home(env)
     _inject_session_context_env(env)
+    # Never inherit a previous turn's cron-store identity. Only the typed current run can mint it.
+    env.pop("HERMES_CRON_STORE_BINDING", None)
+    cron_jobs = sys.modules.get("cron.jobs")
+    binding = cron_jobs.cron_child_store_binding() if cron_jobs is not None else None
+    if binding is not None:
+        env["HERMES_CRON_STORE_BINDING"] = json.dumps(binding, sort_keys=True)
     _strip_hermes_owned_pythonpath_and_runtime_markers(env)
     _apply_windows_msys_bash_env_defaults(env)
     from agent.delegation_context import delegated_child_subprocess_env

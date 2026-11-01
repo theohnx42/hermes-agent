@@ -271,11 +271,27 @@ async def reload_mcp(connection, ref, params):
 
     def reconcile():
         with suppress_interactive_oauth():
-            return (discovery.reconcile_mcp_servers_with_config(), discovery.mcp_servers_not_connected(),
-                    discovery.mcp_servers_ready())
-    result, failed, ready = await asyncio.to_thread(reconcile)
+            result = discovery.reconcile_mcp_servers_with_config()
+            # Name reconciliation alone leaves an enabled server on its old
+            # command/args forever. Reuse the settings-driven identity comparer
+            # on explicit reload, when this profile has no accepted work in flight.
+            if _mcp_input_reload_idle(connection.authority):
+                restarted = discovery.restart_mcp_servers_with_new_inputs(set(discovery.mcp_servers_ready()))
+                if restarted:
+                    result = {**result, 'restarted': restarted}
+            return (result, discovery.mcp_servers_not_connected(), discovery.mcp_servers_ready())
+    # Reuse the admission ordering lock: work committed before this reload is
+    # visible to the idle guard; a later input waits until reconnect finishes.
+    # No SQLite transaction is held across MCP transport work.
+    order = getattr(connection.authority, '_ordered_writes', None)
+    if order is None:
+        order = connection.authority._ordered_writes = asyncio.Lock()
+    async with order:
+        result, failed, ready = await asyncio.to_thread(reconcile)
     # ``added`` is what reconcile attempted: only those now registered (live or lazy) changed anything.
     result = {**result, 'added': [name for name in result.get('added', []) if name not in failed]}
+    if 'restarted' in result:
+        result['restarted'] = [name for name in result['restarted'] if name not in failed]
     from gateway.session_authorities import served_profile_name
     runner = connection.authority.runner
     multiplex = bool(getattr(runner.config, 'multiplex_profiles', False))
@@ -285,7 +301,7 @@ async def reload_mcp(connection, ref, params):
     # Refuse only a reload whose own work did not take effect: a call that names the revision the session
     # already holds has nothing left to load, and refusing it leaves a client that acknowledges on
     # ``reloaded`` retrying a parked server at poll rate with no way to close the handshake (#141769).
-    if (failed and session != 'applied' and not (result.get('removed') or result['added'])
+    if (failed and session != 'applied' and not (result.get('removed') or result['added'] or result.get('restarted'))
             and params.get('rev') != held_rev):
         raise RuntimeStoreError('mcp_servers_unavailable', field='mcp_servers',
                                 detail=f'did not connect: {", ".join(failed)}')
@@ -299,6 +315,21 @@ async def reload_mcp(connection, ref, params):
     return {'status': 'reloaded', 'message': f'MCP servers reconciled ({changed}){note}{unavailable}',
             **({'loaded_rev': held_rev} if held_rev else {}),
             **({'session': session} if session else {}), **({'unavailable': failed} if failed else {}), **selected}
+
+
+def _mcp_input_reload_idle(authority):
+    """Profile-wide input reconnects must leave accepted turns and managed workers alone.
+
+    The DB is this authority's profile store, so another served profile is not
+    inspected or refreshed. Missing runtime state fails closed for reconnects.
+    """
+    db = getattr(authority, 'db', None)
+    if db is None:
+        return False
+    with db._read_ctx() as conn:
+        if conn.execute("SELECT 1 FROM session_admissions WHERE status IN ('queued','started','unknown') LIMIT 1").fetchone():
+            return False
+        return not conn.execute("SELECT 1 FROM worker_executions WHERE status IN ('registered','running','unknown') LIMIT 1").fetchone()
 
 
 async def _held_mcp_rev(connection, ref):

@@ -529,7 +529,7 @@ export async function loadRuntimePlugin(
     console.error(`[plugins] runtime load failed (${origin})`, error)
     notifyError(error, `Plugin "${origin}" failed to load`)
     publishPlugin({
-      id: origin,
+      id: diskOriginRecordId(origin, options.kind),
       name: origin,
       kind: options.kind ?? 'disk',
       file: options.file,
@@ -655,6 +655,10 @@ const disk = new Map<string, DiskPlugin>()
 let watching = false
 let scanning = false
 
+function diskOriginRecordId(origin: string, kind: PluginKind = 'disk'): string {
+  return kind === 'disk' && $pluginRecords.get()[origin]?.kind === 'bundled' ? `${origin}:disk-shadowed` : origin
+}
+
 /** Drop a folder-named error record — unless that name is the live plugin id
  *  of ANOTHER disk entry (two roots can carry same-named folders; a broken one
  *  must not clobber its healthy namesake's inventory row). */
@@ -665,7 +669,8 @@ function dropOriginRecord(origin: string, except: DiskPlugin): void {
     }
   }
 
-  dropPlugin(origin)
+  // A failed import never owned the bundled twin's inventory or lifecycle.
+  dropPlugin(diskOriginRecordId(origin))
 }
 
 /** A plugin source that could not be read in FULL. Evaluating a truncated
@@ -744,7 +749,7 @@ async function loadDiskPlugin(entry: DiskPlugin): Promise<boolean> {
       console.error(`[plugins] ${entry.origin}: ${error.message}`)
       notifyError(error, `Plugin "${entry.origin}" failed to load`)
       publishPlugin({
-        id: entry.origin,
+        id: diskOriginRecordId(entry.origin),
         name: entry.origin,
         kind: 'disk',
         file: entry.file,

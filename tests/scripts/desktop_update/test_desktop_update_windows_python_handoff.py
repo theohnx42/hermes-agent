@@ -9,6 +9,7 @@ import subprocess
 import pytest
 
 from tests.installation_launcher_fixture import publish_fixture_launcher
+from tests.scripts.desktop_update.test_desktop_update_windows_commit_outcome import _handoff
 
 ROOT = Path(__file__).resolve().parent.parent.parent.parent
 CLI = """
@@ -153,3 +154,12 @@ def test_command_file_launcher_probe_runs_through_cmd_exe_explicitly(tmp_path: P
     assert 'ARGS="--version" "two words"' in ok.stdout, ok.stdout
     bad = probe('100%PATH%')
     assert (bad.returncode, bad.stdout) == (3, 'refused'), bad.stdout + bad.stderr
+
+
+@pytest.mark.platforms('windows')
+def test_hanging_update_help_probe_is_bounded(tmp_path: Path) -> None:
+    code, out, argv, _result, _ = _handoff(
+        tmp_path, '-NoGateway', '-ProbeTimeoutSeconds', '10', timeout=120, HANDOFF_HELP_HANG='1',
+    )
+    assert code == 0, out
+    assert argv[0][:2] == ['update', '--yes'] and '--keep-stash' not in argv[0], argv

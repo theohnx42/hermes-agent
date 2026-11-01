@@ -5,7 +5,9 @@ import type { StatusbarItem } from '@/app/shell/statusbar-controls'
 import { getLocalHardware } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { Activity } from '@/lib/icons'
+import { $activeGatewayRoute, activeGatewayConnectionId } from '@/store/gateway'
 import { $localModelsEnabled } from '@/store/local-models-flag'
+import { $connection, $gatewayState } from '@/store/session'
 import { $statusbarHiddenIds } from '@/store/statusbar-prefs'
 import type { LocalHardware } from '@/types/hermes'
 
@@ -52,6 +54,9 @@ export function useSystemResourcesStatusbarItem(): StatusbarItem {
   const { t } = useI18n()
   const copy = t.shell.statusbar.systemResources
   const hiddenIds = useStore($statusbarHiddenIds)
+  const connection = useStore($connection)
+  const gatewayProfile = useStore($activeGatewayRoute)
+  const gatewayState = useStore($gatewayState)
   // Behind the --local launch flag: without it the item is absent from the
   // bar AND from the customize menu (no toggleLabel), and never polls.
   const enabled = $localModelsEnabled.get()
@@ -59,10 +64,15 @@ export function useSystemResourcesStatusbarItem(): StatusbarItem {
   const [hardware, setHardware] = useState<LocalHardware | null>(null)
 
   useEffect(() => {
-    if (!shown) {
+    setHardware(null)
+
+    if (!shown || !connection || gatewayState !== 'open') {
       return
     }
 
+    // Descriptors may retain a saved legacy alias. The active gateway owns
+    // the actual source/profile tuple; ambient preview scope does not.
+    const scope = { connectionId: activeGatewayConnectionId(), profile: gatewayProfile }
     let cancelled = false
     let timer: number | null = null
 
@@ -74,7 +84,9 @@ export function useSystemResourcesStatusbarItem(): StatusbarItem {
       }
 
       try {
-        const next = await getLocalHardware()
+        // Hardware belongs to the connected host, not a hovered profile's
+        // ambient request scope. Never ensure another profile for this poll.
+        const next = await getLocalHardware(scope)
 
         if (!cancelled) {
           setHardware(next)
@@ -118,7 +130,7 @@ export function useSystemResourcesStatusbarItem(): StatusbarItem {
         window.clearTimeout(timer)
       }
     }
-  }, [shown])
+  }, [shown, connection, gatewayProfile, gatewayState])
 
   const hasGpu = Boolean(hardware?.gpu_name)
 

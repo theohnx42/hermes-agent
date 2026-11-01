@@ -386,7 +386,8 @@ def test_gateway_vbs_script_is_console_less(monkeypatch):
     assert "pythonw.exe" in content
     assert "hermes_cli.main" in content
     assert "gateway run" in content
-    assert ", 0, False" in content  # hidden window, detached/async
+    assert ", 0, True)" in content  # hidden window, wait for the gateway
+    assert "WScript.Quit exitCode" in content
     for var in ("HERMES_HOME", "PYTHONIOENCODING", "HERMES_GATEWAY_DETACHED", "VIRTUAL_ENV", "PYTHONPATH"):
         assert var in content
     assert "--profile" in content and "work" in content
@@ -868,3 +869,50 @@ def test_decode_schtasks_output_honours_a_utf16_bom():
     text = "Herm\u00e9s"
     assert gateway_windows._decode_schtasks_output(text.encode("utf-16")) == text
     assert gateway_windows._decode_schtasks_output(b"\xff\xfe<\x00?")
+
+
+def test_task_user_prefers_token_identity_over_ssh_workgroup(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setenv("USERDOMAIN", "WORKGROUP")
+    monkeypatch.setenv("USERNAME", "alice")
+    calls = []
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(returncode=0, stdout=b"NIGHTFALL\\alice\n")
+    monkeypatch.setattr(gateway_windows.subprocess, "run", run)
+    assert gateway_windows._resolve_task_user() == "NIGHTFALL\\alice"
+    assert calls == [(["whoami"], dict(capture_output=True, timeout=5, check=False))]
+
+
+@pytest.mark.parametrize("codec, identity", [("cp936", "NIGHTFALL\\方舟"), ("cp850", "DOMÄIN\\jörg")])
+def test_task_user_reuses_native_console_decoder(monkeypatch, codec, identity):
+    from types import SimpleNamespace
+    monkeypatch.setattr(gateway_windows, "_windows_console_encodings", lambda: [codec])
+    monkeypatch.setattr(gateway_windows.subprocess, "run", lambda *a, **kw: SimpleNamespace(
+        returncode=0, stdout=(identity + "\n").encode(codec)))
+    assert gateway_windows._resolve_task_user() == identity
+
+
+def test_task_user_does_not_promote_lossy_identity(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setenv("USERDOMAIN", "NIGHTFALL")
+    monkeypatch.setenv("USERNAME", "alice")
+    monkeypatch.setattr(gateway_windows, "_windows_console_encodings", lambda: ["ascii"])
+    monkeypatch.setattr(gateway_windows.subprocess, "run", lambda *a, **kw: SimpleNamespace(
+        returncode=0, stdout=b"NIGHTFALL\\\xff\n"))
+    assert gateway_windows._resolve_task_user() == "NIGHTFALL\\alice"
+
+
+def test_task_user_falls_back_when_token_lookup_times_out(monkeypatch):
+    import subprocess
+    monkeypatch.setenv("USERDOMAIN", "NIGHTFALL")
+    monkeypatch.setenv("USERNAME", "alice")
+    def run(*args, **kwargs):
+        raise subprocess.TimeoutExpired("whoami", 5)
+    monkeypatch.setattr(gateway_windows.subprocess, "run", run)
+    assert gateway_windows._resolve_task_user() == "NIGHTFALL\\alice"
+
+
+def test_startup_chain_stays_detached_while_task_tracks_gateway():
+    content = gateway_windows._build_startup_launcher(Path("gateway.cmd"))
+    assert ", 0, False" in content

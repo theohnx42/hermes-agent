@@ -525,7 +525,11 @@ export function prewarmProfileBackend(name: string, connectionId: null | string 
   // tunnel and spawns `hermes -p <profile> serve --isolated` on the remote
   // box, so a hover sweep across the roster spawned one isolated backend per
   // bot and knocked the primary chat over. Only an explicit open may dial SSH.
-  if (connection && registryConnectionKind(connection) === 'ssh') {
+  // Local speculation can run gateway ensure for every hovered home. Disabled
+  // services and cold runtimes must stay idle until an explicit selection.
+  const kind = connection ? registryConnectionKind(connection) : $connection.get()?.mode
+
+  if (kind === 'ssh' || kind === 'local' || (!connection && !kind)) {
     return
   }
 

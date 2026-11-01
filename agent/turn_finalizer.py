@@ -797,6 +797,7 @@ def finalize_turn(
         _invoke_hook_safely(
             "on_session_end", logger,
             session_id=agent.session_id,
+            platform_message_id=getattr(agent, "_persist_user_message_platform_id", None),
             task_id=effective_task_id,
             turn_id=turn_id,
             completed=completed,

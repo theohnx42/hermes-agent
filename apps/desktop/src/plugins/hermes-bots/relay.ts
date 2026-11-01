@@ -421,6 +421,36 @@ async function syncRelayRosters() {
       // reappears. Push the now-empty roster once per sole connection so it
       // forgets it — a replacement sole connection has never been told. An
       // empty route list (registry not loaded yet) must not spend the clear.
+      // Local profiles are inventory, not running peers. Clearing a stale
+      // roster must not cold-start every disabled profile each minute. The
+      // active socket can clear its own home; inactive homes reconcile when
+      // selected (the cache key includes the active profile).
+      if (connections.length > 0 && connections.every(connection => connection.route.mode === 'local')) {
+        const activeId = host.activeConnectionId?.()
+        const activeProfile = String(host.state.profile?.get?.() || '').trim()
+
+        const active = connections.find(connection =>
+          (activeId ? connection.id === activeId : connection.route.primary === true) &&
+          (connection.route.profile === activeProfile || connection.route.targetProfile === activeProfile)
+        )
+
+        const key = active ? JSON.stringify([active.id, activeProfile]) : null
+
+        if (key && key !== relay.rosterClearedFor && host.state.gateway.get() === 'open') {
+          try {
+            await host.request('bot_relay.roster.sync', { agents: [] })
+
+            if (isCurrent() && host.state.profile.get() === activeProfile && host.activeConnectionId?.() === activeId) {
+              relay.rosterClearedFor = key
+            }
+          } catch {
+            // Retry only this already-open owner on the next roster tick.
+          }
+        }
+
+        return
+      }
+
       if (peerCount(connections) === 1 && connections[0].id !== relay.rosterClearedFor) {
         const cleared = await Promise.all(
           connections.map(async connection => {

@@ -223,33 +223,10 @@ def _session_start_like(agent: Any, now: Any) -> Any:
 
 
 def _agent_home(agent: Any) -> Optional[Path]:
-    """The agent's OWN profile home, or None to use ambient resolution.
-    A bound HERMES_HOME ContextVar override wins (the gateway multiplexes
-    profiles over one shared session DB and binds the home per turn); else the
-    parent of ``_session_db.db_path`` — ground truth on threads that lost the
-    ContextVar, where ambient resolution would leak the launch profile.
+    """Resolve the agent's logical profile rather than its DB storage directory."""
+    from hermes_constants import get_agent_hermes_home
 
-    1. Surfaces that multiplex several profiles over ONE shared session DB (the messaging gateway:
-    ``gateway/run.py`` hands every agent the launch-home ``state.db`` and binds the profile home per turn
-    via ``_profile_runtime_scope`` + ``copy_context``) would otherwise have the db-derived launch home STOMP
-    the correctly-bound profile — inverting the leak this helper exists to fix (found by @kshitijk4poor's
-    post-merge probe on #86313). 2. Fallback: the home containing the agent's ``_session_db.db_path``
-    (``<home>/state.db``) — ground truth on threads that lost the ContextVar (ContextVars don't propagate
-    into ``threading.Thread``), where the unbound build previously fell back to the launch home and leaked
-    the default profile's skills/identity into a bot prompt.
-    """
-    try:
-        from hermes_constants import get_hermes_home_override
-        override = get_hermes_home_override()
-        if override:
-            return Path(override)
-    except Exception:
-        pass
-    try:
-        db_path = getattr(getattr(agent, "_session_db", None), "db_path", None)
-        return Path(db_path).parent if db_path else None
-    except Exception:
-        return None
+    return get_agent_hermes_home(agent)
 
 
 def _agent_skills_dir(agent: Any) -> Optional[Path]:

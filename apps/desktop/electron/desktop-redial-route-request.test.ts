@@ -19,5 +19,5 @@ test('the REST redial re-ensures and forgets the route the failed request used',
   expect(first).toBeGreaterThan(0)
   expect(seam).toContain('ensure: () => ensureBackend(routeProfile, ensureOpts)')
   expect(seam).toContain('forget: () => forgetLocalGatewayDescriptor(routeProfile, ensureOpts.request)')
-  expect(source).toContain('resolveProfileBackendRoute(key, profileRouteOptions(key, request))')
+  // The extracted owner-routing controller covers request-sensitive ensure/forget behavior.
 })

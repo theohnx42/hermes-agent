@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { HermesReadDirResult } from '@/global'
 import type * as HermesModule from '@/hermes'
 
-import { emitGatewayEvent } from './events'
+import { emitGatewayEvent, onGatewayEvent } from './events'
 import { $pluginRecords, publishPlugin, setPluginEnabled } from './plugins-store'
 import {
   discoverRuntimePlugins,
@@ -489,6 +489,16 @@ describe('uninstallDiskPlugin (Plugins hub trash button)', () => {
 })
 
 describe('bundled-shadowed disk copies', () => {
+  it.each(['bundled', 'runtime'] as const)('keeps an explicit %s load failure visible under its own identity', async kind => {
+    const id = `explicit-${kind}-failure`
+    publishPlugin({ id, name: id, kind: 'bundled', status: 'loaded' })
+    const result = await loadRuntimePlugin("import 'https://invalid.example/module.js'", id, { kind })
+
+    expect(result).toBeNull()
+    expect($pluginRecords.get()[id]).toMatchObject({ kind, status: 'error' })
+    expect($pluginRecords.get()[`${id}:disk-shadowed`]).toBeUndefined()
+  })
+
   it('skips a disk copy of a bundled plugin but publishes a visible inventory row', async () => {
     // The bundled twin is already registered (build-time glob).
     publishPlugin({ id: 'hermes-bots', name: 'Bot Mode', kind: 'bundled', status: 'loaded' })
@@ -989,6 +999,74 @@ describe('loader hardening: hangs, leaks, duplicate ids, stale incarnations', ()
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('a failed SDK import and disk retirement preserve the bundled twin and its lifecycle', async () => {
+    const restore = withBlobReroute()
+    const builtinEvent = vi.fn()
+    let stop = onGatewayEvent('bot_relay.outbox.pending', builtinEvent)
+    const activate = vi.fn(() => { stop = onGatewayEvent('bot_relay.outbox.pending', builtinEvent) })
+    const deactivate = vi.fn(() => stop())
+    const builtin = { id: 'hermes-bots', name: 'Bot Mode', kind: 'bundled' as const, status: 'loaded' as const }
+    publishPlugin(builtin, { activate, deactivate })
+
+    try {
+      rootWith({
+        'hermes-bots': () => `import { McpTab } from '@hermes/plugin-sdk'
+export default { id: 'hermes-bots', register() { McpTab() } }`
+      })
+      await discoverRuntimePlugins()
+      expect($pluginRecords.get()['hermes-bots']).toEqual(builtin)
+      expect($pluginRecords.get()['hermes-bots:disk-shadowed']).toMatchObject({ status: 'error' })
+      emitGatewayEvent({ type: 'bot_relay.outbox.pending' } as never)
+      expect(builtinEvent).toHaveBeenCalledTimes(1)
+
+      rootWith({})
+      await discoverRuntimePlugins()
+      expect($pluginRecords.get()['hermes-bots']).toEqual(builtin)
+      expect($pluginRecords.get()['hermes-bots:disk-shadowed']).toBeUndefined()
+      await setPluginEnabled('hermes-bots', false)
+      emitGatewayEvent({ type: 'bot_relay.outbox.pending' } as never)
+      expect(builtinEvent).toHaveBeenCalledTimes(1)
+      await setPluginEnabled('hermes-bots', true)
+      expect(deactivate).toHaveBeenCalledOnce()
+      expect(activate).toHaveBeenCalledOnce()
+      emitGatewayEvent({ type: 'bot_relay.outbox.pending' } as never)
+      expect(builtinEvent).toHaveBeenCalledTimes(2)
+    } finally {
+      stop()
+      restore()
+    }
+  })
+
+  it('still replaces and retires a legitimate disk plugin and its event listeners', async () => {
+    const restore = withBlobReroute()
+    counters.__replacementHits = 0
+    let increment = 1
+
+    try {
+      rootWith({ 'replacement-folder': () => `
+        import { host } from '@hermes/plugin-sdk'
+        export default { id: 'replacement', register() {
+          host.onEvent('bot_relay.outbox.pending', () => { globalThis.__replacementHits += ${increment} })
+        } }` })
+      await discoverRuntimePlugins()
+      emitGatewayEvent({ type: 'bot_relay.outbox.pending' } as never)
+      expect(counters.__replacementHits).toBe(1)
+      increment = 10
+      await discoverRuntimePlugins()
+      emitGatewayEvent({ type: 'bot_relay.outbox.pending' } as never)
+      expect(counters.__replacementHits).toBe(11)
+      rootWith({})
+      await discoverRuntimePlugins()
+      expect($pluginRecords.get().replacement).toBeUndefined()
+      emitGatewayEvent({ type: 'bot_relay.outbox.pending' } as never)
+      expect(counters.__replacementHits).toBe(11)
+    } finally {
+      unloadRuntimePlugin('replacement')
+      delete counters.__replacementHits
+      restore()
+    }
   })
 
   it('a plugin whose import never settles times out as ITS error; the rest of the scan still loads', async () => {
