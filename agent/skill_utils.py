@@ -856,14 +856,33 @@ def is_skill_description_truncated_for_prompt(frontmatter: dict[str, Any]) -> bo
     return len(_normalize_skill_description(frontmatter)) > SKILL_PROMPT_DESC_LIMIT
 
 
-def iter_skill_index_files(skills_dir: Path, filename: str):
+def iter_skill_index_files(skills_dir: Path, filename: Optional[str], *, legacy_markdown=False):
     """Walk skills_dir yielding sorted paths matching *filename*; prunes
     EXCLUDED_SKILL_DIRS and support dirs of skill roots."""
     matches: list[str] = []
-    for root, dirs, files in os.walk(str(skills_dir), followlinks=True):
+    ancestry = {}
+    for root, dirs, files in os.walk(str(skills_dir), followlinks=not legacy_markdown):
+        # Follow useful category links, but never descend through a link back to
+        # an ancestor. Keep distinct aliases (and separate search roots) visible.
+        try:
+            info = os.stat(root)
+        except OSError:
+            dirs[:] = []
+            continue
+        identity = ((info.st_dev, info.st_ino) if info.st_ino
+                    else os.path.normcase(os.path.realpath(root)))
+        parents = ancestry.pop(root, frozenset())
+        if identity in parents:
+            dirs[:] = []
+            continue
         has_skill_md = "SKILL.md" in files
-        dirs[:] = [d for d in dirs if d not in EXCLUDED_SKILL_DIRS and not (has_skill_md and d in SKILL_SUPPORT_DIRS)]
-        if filename in files:
+        if not legacy_markdown:
+            dirs[:] = [d for d in dirs if d not in EXCLUDED_SKILL_DIRS and not (has_skill_md and d in SKILL_SUPPORT_DIRS)]
+        for directory in dirs:
+            ancestry[os.path.join(root, directory)] = parents | {identity}
+        if legacy_markdown:
+            matches.extend(os.path.join(root, name) for name in files if name.endswith('.md'))
+        elif filename in files:
             matches.append(os.path.join(root, filename))
     yield from map(Path, sorted(matches))
 

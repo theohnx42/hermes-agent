@@ -8,6 +8,7 @@ import contextvars
 import json
 import logging
 import os
+import threading
 import time
 from contextlib import contextmanager, suppress
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -37,23 +38,30 @@ logger = logging.getLogger(__name__)
 # edits, which no directory signature can see.
 _SKILLS_CACHE: dict = {}
 _SKILLS_CACHE_TTL_SECONDS = 30.0
+_LOOKUP_SCAN_LOCK = threading.RLock()
 # Deepest directory the signature descends to below a root (a skill sits at <cat>/<sub>/<skill>/).
 _SIGNATURE_MAX_DEPTH = 6
 
 
 def clear_skills_cache() -> None:
     """Drop the scanned catalog so the next listing re-scans (explicit reloads must not wait out the TTL)."""
-    _SKILLS_CACHE.clear()
+    with _LOOKUP_SCAN_LOCK:
+        _SKILLS_CACHE.clear()
 
 
-def _dir_tree_signature(root, sig, depth=_SIGNATURE_MAX_DEPTH) -> None:
+def _dir_tree_signature(root, sig, depth=_SIGNATURE_MAX_DEPTH, _ancestors=frozenset(), *, _legacy=False) -> None:
     """Append ``(dir, mtime_ns, child dir names)`` for *root* and the dirs below it the catalog walks
     (``iter_skill_index_files``: no excluded dirs, no support dirs of a skill), depth-bounded. The child
     names, not only mtimes: an install and an uninstall inside one coarse mtime tick (1-2 s on some
     filesystems) leave every mtime equal, and the change must still show. ~1 ms for 170 dirs."""
     from agent.skill_utils import EXCLUDED_SKILL_DIRS, SKILL_SUPPORT_DIRS
     try:
-        mtime = os.stat(root).st_mtime_ns
+        info = os.stat(root)
+        identity = ((info.st_dev, info.st_ino) if info.st_ino
+                    else os.path.normcase(os.path.realpath(root)))
+        if identity in _ancestors:
+            return
+        mtime = info.st_mtime_ns
         with os.scandir(root) as it:
             entries = list(it)
     except OSError:
@@ -70,8 +78,11 @@ def _dir_tree_signature(root, sig, depth=_SIGNATURE_MAX_DEPTH) -> None:
     if depth <= 0:
         return
     for name in names:
-        if name not in EXCLUDED_SKILL_DIRS and not (is_skill and name in SKILL_SUPPORT_DIRS):
-            _dir_tree_signature(os.path.join(root, name), sig, depth - 1)
+        child = os.path.join(root, name)
+        if _legacy and os.path.islink(child):
+            continue  # legacy Path.rglob did not follow category symlinks
+        if _legacy or name not in EXCLUDED_SKILL_DIRS and not (is_skill and name in SKILL_SUPPORT_DIRS):
+            _dir_tree_signature(child, sig, depth - 1, _ancestors | {identity}, _legacy=_legacy)
 
 
 def _skills_scan_signature(dirs_to_scan, disabled) -> tuple:
@@ -381,12 +392,54 @@ def _is_package_owned_markdown(path: Path, search_root: Path) -> bool:
     )
 
 
+def _skill_lookup_snapshot(all_dirs):
+    """Share one candidate scan, including its signature, across concurrent lookups.
+
+    Reuse the existing discovery cache/TTL and reload invalidation. Sequential
+    requests still check the directory signature; waiters consume the snapshot
+    their leader just validated instead of repeating that traversal themselves.
+    Candidate collection precedes precedence/ambiguity decisions, as before.
+    """
+    from agent.skill_utils import iter_skill_index_files
+    key = ('lookup_candidates', tuple(str(d) for d in all_dirs))
+    observed_entry = _SKILLS_CACHE.get(key)
+    with _LOOKUP_SCAN_LOCK:
+        now = time.monotonic()
+        cached = _SKILLS_CACHE.get(key)
+        if (cached is not None and cached is not observed_entry
+                and now - cached[1] < _SKILLS_CACHE_TTL_SECONDS):
+            return cached[2]
+        signature = _skills_scan_signature(all_dirs, set())
+        # Legacy flat collisions also live in archive/support directories that
+        # the active catalog's signature deliberately prunes.
+        legacy_signature = []
+        for root in all_dirs:
+            _dir_tree_signature(str(root), legacy_signature, _legacy=True)
+        signature = (signature, tuple(legacy_signature))
+        if cached is not None and cached[0] == signature and now - cached[1] < _SKILLS_CACHE_TTL_SECONDS:
+            # Publish that this leader validated even a warm snapshot, so its
+            # waiters also avoid repeating the signature walk. Keep the scan's
+            # original timestamp: repeated hits must not postpone edit expiry.
+            _SKILLS_CACHE[key] = (cached[0], cached[1], cached[2])
+            return cached[2]
+        snapshot = {}
+        for search_dir in all_dirs:
+            skills = tuple((p, _safe_frontmatter(p).get('name'))
+                           for p in iter_skill_index_files(search_dir, 'SKILL.md'))
+            # Preserve legacy flat lookup, including its historical archive
+            # collision checks; unlike the active catalog it did not prune those.
+            legacy = tuple(iter_skill_index_files(search_dir, None, legacy_markdown=True))
+            snapshot[search_dir] = (skills, legacy)
+        _SKILLS_CACHE[key] = (signature, time.monotonic(), snapshot)
+        return snapshot
+
+
 def _collect_skill_candidates(name, local_category_name, all_dirs):
     """ALL (skill_dir, skill_md) candidates across every dir and lookup strategy (direct path,
     recursive by dir / frontmatter name, legacy flat <name>.md), deduped by resolved path.
     Every copy is returned so the caller resolves them via ``agent.skill_utils.pick_skill_candidate``
     (cross-tier precedence; a same-tier tie of different skills is refused, never guessed)."""
-    from agent.skill_utils import iter_skill_index_files
+    snapshot = _skill_lookup_snapshot(all_dirs)
     candidates: list[tuple[Optional[Path], Path]] = []
     seen_md: set = set()
 
@@ -411,13 +464,16 @@ def _collect_skill_candidates(name, local_category_name, all_dirs):
             _record_direct(search_dir / direct, search_dir)
         # Recursive by directory name plus frontmatter `name:` — skills_list()
         # exposes the frontmatter name, so skill_view(name) must accept it too.
-        for found_skill_md in iter_skill_index_files(search_dir, "SKILL.md"):
+        skills, legacy = snapshot[search_dir]
+        for found_skill_md, declared_name in skills:
             if (found_skill_md.parent.name == name
-                    or _safe_frontmatter(found_skill_md).get("name") == name):
+                    or declared_name == name):
                 _record(found_skill_md.parent, found_skill_md)
         # Legacy flat <name>.md anywhere under the dir. Markdown owned by an ancestor
         # directory skill loads through file_path and must not shadow a real skill.
-        for found_md in search_dir.rglob(f"{name}.md"):
+        for found_md in legacy:
+            if not found_md.match(f"{name}.md"):
+                continue
             if (found_md.name != "SKILL.md" and not _is_skill_support_path(found_md)
                     and not _is_package_owned_markdown(found_md, search_dir)):
                 _record(None, found_md)
