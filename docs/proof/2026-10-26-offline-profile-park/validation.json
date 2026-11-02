@@ -1,0 +1,15 @@
+{
+  "scope": "Source-only offline named-profile stop intent through existing gateway.parked contract",
+  "base_pr": "https://github.com/theohnx42/hermes-agent/pull/2",
+  "base_head": "e5dd0631b836d990a4b3d4021dd507d53b433d90",
+  "installed_matching_preimage_sha256": "09636a04a64c0b4e9a2f94cdf712711d9bf23e1eece79edee23c0eb810e1d45f",
+  "candidate_source_sha256": "47b3ea28338757eaf1b0955b15379bf49c2223bf47df4db3c085e9e55ccea205",
+  "tests_sha256": "6b8f0acbb31f578394f547e56cb18841149a52fe0155d4d1f8e12e28a629cf6c",
+  "test_command": "PYTHONPATH=. /home/austin/.hermes/hermes-agent/.venv/bin/python -m pytest -q tests/hermes_cli/test_gateway_offline_profile_park.py tests/hermes_cli/test_gateway_multiplex_lifecycle.py -k 'not dashboard_exposes_parked_profile_and_start_unparks_it'",
+  "result": {"passed": 63, "deselected": 1, "elapsed_seconds": 3.23},
+  "initial_full_combined_result": {"passed": 63, "failed": 1, "elapsed_seconds": 4.71},
+  "environment_failure": "Existing dashboard test imports plugins.memory through an editable package pointing outside the sparse worktree into the real Hermes home. The home I/O guard refuses that access. No dependency installed, test guard bypassed, or dashboard source changed.",
+  "other_validation": ["Ruff passed on changed Python files", "git diff --check passed"],
+  "runtime": {"deployed": false, "profile_parked": false, "gateway_started_or_restarted": false, "provider_or_auth_action": false},
+  "acceptance_boundary": "Tests prove lifecycle branching and fail-closed probes using isolated fixtures. Native Windows adoption and actual profile park remain separate gates."
+}

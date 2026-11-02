@@ -44,6 +44,41 @@ def host_scope_for_all_verb(owner):
     return _home_env(owner.home if owner is not None else get_default_hermes_root())
 
 
+def _park_without_host(home, name, marker) -> bool:
+    """Persist a named profile's stop intent before a host exists, without starting it.
+
+    A positive absence verdict is required for both homes. An installed profile service
+    retains its existing stop path; ambiguous discovery or live work never becomes a park.
+    """
+    import time
+    from hermes_cli.gateway_runtime import discover_gateway_endpoint
+    from hermes_cli.gateway_runtime_service import discover_existing_gateway_service
+    from hermes_cli.gateway_lifecycle_guards import live_work
+
+    root = get_default_hermes_root()
+    try:
+        for candidate in (home, root):
+            if discover_gateway_endpoint(candidate, timeout=2).state != "absent":
+                raise RuntimeError("owner absence is not proven")
+        if discover_existing_gateway_service(home, deadline=time.monotonic() + 2) is not None:
+            return False  # Preserve the installed profile service's existing stop semantics.
+        work = live_work(home)
+        if work is not None and (int(work.get("active_agents") or 0) or work.get("active_work")):
+            raise RuntimeError("profile has live work")
+        # Recheck after service/work probes: a host may have started during them.
+        for candidate in (home, root):
+            if discover_gateway_endpoint(candidate, timeout=2).state != "absent":
+                raise RuntimeError("owner absence changed")
+        marker.touch()
+    except Exception:
+        # Discovery/service exceptions may contain local control details: keep output bounded.
+        print(f"Refusing to park profile '{name}': offline owner/service/work absence is unverified.")
+        raise SystemExit(1) from None
+    print(f"Profile '{name}' parked while the host is offline; no gateway was started or stopped. "
+          f"Start again with: hermes -p {name} gateway start")
+    return True
+
+
 def profile_lifecycle(command: str, args) -> bool:
     """True when a named-profile command was handled (including an unconfirmed request)."""
     from hermes_cli import gateway as gw
@@ -86,7 +121,7 @@ def profile_lifecycle(command: str, args) -> bool:
         return False
     owner = gw._served_by_another_host_gateway()
     if owner is None and not gw.named_profile_served_by_running_multiplexer():
-        return False
+        return _park_without_host(home, name, marker) if command == "stop" else False
     host_home = owner.home if owner is not None else get_default_hermes_root()
     # Unserving stops this profile's executing turns: the live-work policy applies before the teardown.
     from hermes_cli.gateway_lifecycle_guards import refuse_while_sessions_live
