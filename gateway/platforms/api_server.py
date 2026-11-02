@@ -3228,7 +3228,14 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         if err:
             return err
         db = await self._ensure_session_db_async()
-        resolved_id = await asyncio.to_thread(db.resolve_resume_session_id, session_id)
+        from hermes_state_local import local_transcript_target
+        from hermes_state_runtime import RuntimeStoreError
+        try:
+            target = await asyncio.to_thread(local_transcript_target, db, session_id)
+        except RuntimeStoreError:
+            return _error_response("Session transcript is unavailable", 503, code="storage_unavailable")
+        resolved_id = target if target is not None else await asyncio.to_thread(db.resolve_resume_session_id, session_id)
+        response_id = session_id if target is not None else resolved_id
         raw_limit, raw_offset = request.query.get("limit"), request.query.get("offset", "0")
         order = request.query.get("order")
         if order not in (None, "oldest", "latest"):
@@ -3249,7 +3256,8 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
             db.get_messages, resolved_id, limit=limit, offset=offset, latest=latest_page,
             include_compacted=include_compacted, include_ancestors=True)
         return web.json_response({
-            "object": "list", "session_id": resolved_id,
+            "object": "list", "session_id": response_id,
+            **({"transcript_session_id": resolved_id} if response_id != resolved_id else {}),
             "data": [self._message_response(m) for m in messages],
             "pagination": {
                 "limit": limit, "offset": offset,

@@ -1,6 +1,7 @@
 """Private local creation receipts in the canonical runtime transaction owner."""
 import json
 import time
+from pathlib import Path
 
 from hermes_state_runtime import RuntimeStoreError, _epoch, _json
 
@@ -261,6 +262,47 @@ def local_receipt(db, session_id):
             raise ValueError('invalid receipt')
         return value
     except (TypeError, ValueError) as exc:
+        raise RuntimeStoreError('storage_unavailable') from exc
+
+
+def local_transcript_target(db, session_id):
+    """Read-only physical display target of a logical local receipt, or None for legacy rows.
+
+    The receipt owns reset/compression routing. Never restore an authority, create a
+    session, or fall back to a stale transcript when a present receipt cannot be verified.
+    """
+    with db._read_ctx() as conn:
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='state_meta'").fetchone() is None:
+            return None
+        present = conn.execute('SELECT 1 FROM state_meta WHERE key=?', (POLICY_PREFIX + session_id,)).fetchone()
+    if present is None:
+        return None
+    try:
+        receipt = local_receipt(db, session_id)
+        entry, route, principal = receipt['entry'], receipt['route'], receipt['principal_id']
+        target, origin = entry['session_id'], entry['origin']
+        home = Path(receipt['profile_id'])
+        if (receipt['session_id'] != session_id or not home.is_absolute()
+                or home.resolve() != Path(db.db_path).resolve().parent
+                or not isinstance(route, str) or not route
+                or not isinstance(principal, str) or not principal
+                or not isinstance(target, str) or not target
+                or entry['session_key'] != route or origin['platform'] != 'local'
+                or origin['chat_id'] != session_id or origin['user_id'] != principal):
+            raise ValueError('local receipt identity mismatch')
+        lineage = receipt.get('lineage', [session_id])
+        if (not isinstance(lineage, list) or session_id not in lineage or target not in lineage
+                or not all(isinstance(value, str) and value for value in lineage)):
+            raise ValueError('local receipt lineage mismatch')
+        row = db.get_session(target)
+        owner = db._own_profile_name()
+        if (row is None or row.get('profile_name') not in (None, owner)
+                or (origin.get('profile') is not None and origin['profile'] != owner)
+                or (row.get('session_key'), row.get('chat_id'), row.get('user_id'))
+                != (route, origin['chat_id'], principal)):
+            raise ValueError('local transcript target mismatch')
+        return target
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
         raise RuntimeStoreError('storage_unavailable') from exc
 
 
