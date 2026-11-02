@@ -1,0 +1,20 @@
+{
+  "node": "NIGHTFALL",
+  "base": "e5dd0631b836d990a4b3d4021dd507d53b433d90",
+  "observed_failure": "complete.path ntpath.relpath device mount mismatch ValueError for Windows NUL device, logged22:14:26/22:15:17UTC",
+  "source_preimage": "deployed tui_gateway/methods_complete.py exact base bytes confirmed",
+  "fix": "skip only suggestions with ValueError from root/home-relative rendering, retain valid siblings",
+  "validation": {
+    "three_new_real_ntpath_cases_on_old_source": "RED exact mount ValueError",
+    "existing_plus_regression_suite": "15PASS agent5.17s independentroot3.98s",
+    "exact_projection_hashes_match": true,
+    "ruff_hook_config": "PASS",
+    "diff_check": "PASS"
+  },
+  "limits": {
+    "active_list_rpc_timeout_root_cause": "NOT_ESTABLISHED",
+    "live_deployment": false,
+    "live_owner_restart": false,
+    "native_windows_runtime_acceptance": "PENDING"
+  }
+}

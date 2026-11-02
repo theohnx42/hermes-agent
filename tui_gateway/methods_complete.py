@@ -212,14 +212,19 @@ def _dir_listing_items(root: str, word: str, path_part: str, prefix_tag: str, is
         if prefix_tag and (prefix_tag == "folder") != is_dir:  # explicit `@folder:`/`@file:` skip the other kind
             continue
         full = pth.join(search_dir, entry)
-        rel = pth.relpath(full, root).replace(os.sep, "/")
         suffix = "/" if is_dir else ""
-        if is_context:
-            text = f"@{prefix_tag or ('folder' if is_dir else 'file')}:{rel}{suffix}"
-        elif word.startswith("~"):
-            text = "~/" + pth.relpath(full, os.path.expanduser("~") if local else "~") + suffix
-        else:
-            text = ("./" if word.startswith("./") else "") + rel + suffix
+        try:
+            rel = pth.relpath(full, root).replace(os.sep, "/")
+            if is_context:
+                text = f"@{prefix_tag or ('folder' if is_dir else 'file')}:{rel}{suffix}"
+            elif word.startswith("~"):
+                text = "~/" + pth.relpath(full, os.path.expanduser("~") if local else "~") + suffix
+            else:
+                text = ("./" if word.startswith("./") else "") + rel + suffix
+        except ValueError:
+            # Windows devices and other drives have no relative spelling in this root.
+            # Completion is advisory: omit that entry, retaining valid siblings.
+            continue
         items.append(_item(text, "dir" if is_dir else "", entry + suffix))
         if len(items) >= 30:
             break

@@ -358,3 +358,39 @@ def test_completion_ignores_real_terminal_cwd(tmp_path, monkeypatch):
     )
 
 
+
+
+@pytest.mark.parametrize("foreign", [r"D:\outside", r"\\.\NUL"])
+def test_windows_unrepresentable_completion_keeps_valid_siblings(monkeypatch, foreign):
+    import ntpath
+    from types import SimpleNamespace
+
+    # Use real Windows relative-path semantics on every host, without opening a device.
+    root = r"C:\workspace"
+    paths = {"foreign": foreign, "valid.txt": root + r"\valid.txt"}
+    path_api = SimpleNamespace(
+        dirname=lambda value: root, basename=lambda value: "", isabs=ntpath.isabs,
+        normpath=ntpath.normpath, join=lambda directory, entry: paths.get(entry, ntpath.join(directory, entry)),
+        isdir=lambda value: value == root, relpath=ntpath.relpath,
+    )
+    fake_os = SimpleNamespace(path=path_api, sep="\\", listdir=lambda value: ["foreign", "valid.txt"])
+    monkeypatch.setattr(server, "os", fake_os)
+    monkeypatch.setattr(server, "_normalize_completion_path", lambda value: value)
+    items = server._dir_listing_items(root, "./", "./", "", False, local=True)
+    assert [item["text"] for item in items] == ["./valid.txt"]
+
+
+def test_tilde_completion_unrepresentable_home_is_omitted(monkeypatch):
+    import ntpath
+    from types import SimpleNamespace
+
+    root = r"C:\workspace"
+    path_api = SimpleNamespace(
+        dirname=lambda value: root, basename=lambda value: "", isabs=ntpath.isabs,
+        normpath=ntpath.normpath, join=ntpath.join, isdir=lambda value: value == root,
+        relpath=ntpath.relpath, expanduser=lambda value: r"D:\home",
+    )
+    monkeypatch.setattr(server, "os", SimpleNamespace(
+        path=path_api, sep="\\", listdir=lambda value: ["valid.txt"]))
+    monkeypatch.setattr(server, "_normalize_completion_path", lambda value: root + "\\")
+    assert server._dir_listing_items(root, "~/", "~/", "", False, local=True) == []
