@@ -92,6 +92,15 @@ def _rpc_url(base_url: str, card: Optional[dict]) -> str:
     return base_url.rstrip("/")
 
 
+class _SendResult(tuple):
+    """Keep three-value unpacking while retaining distinct transport/task IDs."""
+    def __new__(cls, reply, context_id, state, rpc_request_id, remote_task_id):
+        result = super().__new__(cls, (reply, context_id, state))
+        result.rpc_request_id = rpc_request_id
+        result.remote_task_id = remote_task_id
+        return result
+
+
 def _send_task(agent_label: str, peer: dict, message: str, context_id: str) -> tuple[str, str, str]:
     """One SendMessage to a peer -> (reply_text, context_id, state). Raises urllib errors /
     ValueError for the caller to format; handles redaction, audit, persistence, metrics."""
@@ -112,7 +121,8 @@ def _send_task(agent_label: str, peer: dict, message: str, context_id: str) -> t
     if tenant:
         rpc_body["params"]["tenant"] = tenant
     security.audit("outbound", agent_label, rpc_body["id"], safe_message)
-    protocol.persist_message(ctx, "user", safe_message, rpc_body["id"])
+    protocol.persist_message(ctx, "user", safe_message, rpc_body["id"],
+                             rpc_request_id=rpc_body["id"])
     protocol.metrics.outbound_total += 1
     resp = _http_post_json(_rpc_url(base_url, card), rpc_body, headers, timeout)
     if "error" in resp:
@@ -123,9 +133,19 @@ def _send_task(agent_label: str, peer: dict, message: str, context_id: str) -> t
     if isinstance(payload, dict):
         reply_ctx = payload.get("contextId", ctx)
         state = (payload.get("status") or {}).get("state", "")
-    protocol.persist_message(reply_ctx, "agent", reply, rpc_body["id"])
+    # A bare Message has messageId, not a remote Task identity.
+    remote_task_id = ""
+    if (isinstance(payload, dict) and ("kind" not in payload or payload["kind"] == "task")
+            and "messageId" not in payload and isinstance(payload.get("status"), dict)
+            and isinstance(payload["status"].get("state"), str)
+            and payload["status"]["state"].strip()):
+        value = payload.get("id")
+        if isinstance(value, str) and value.strip():
+            remote_task_id = value
+    protocol.persist_message(reply_ctx, "agent", reply, rpc_body["id"],
+                             rpc_request_id=rpc_body["id"], remote_task_id=remote_task_id)
     protocol.metrics.inbound_total += 1
-    return reply, reply_ctx, state
+    return _SendResult(reply, reply_ctx, state, rpc_body["id"], remote_task_id)
 
 
 def _reply_text_from_result(result: Any) -> str:
@@ -181,7 +201,8 @@ def a2a_call(args: dict, **_: Any) -> str:
     if not peer or not peer.get("url"):
         return f"Error: unknown agent '{agent}'. Configure it under 'a2a_agents' in config.yaml or pass a full http(s):// URL."
     try:
-        reply, reply_ctx, state = _send_task(agent, peer, message, context_id)
+        result = _send_task(agent, peer, message, context_id)
+        reply, reply_ctx, state = result
     except urllib.error.HTTPError as e:
         return _HTTP_CALL_ERRORS.get(e.code, "Error: call to '{agent}' failed — HTTP {code}.").format(agent=agent, code=e.code)
     except ValueError as e:
@@ -190,6 +211,12 @@ def a2a_call(args: dict, **_: Any) -> str:
         return f"Error: call to '{agent}' failed — {e}."
     short_state = state.replace("TASK_STATE_", "").replace("_", "-").lower()  # v0.3 states pass through
     header = f"[{agent} · context {reply_ctx}" + (f" · {short_state}" if state else "") + "]"
+    ids = []
+    for label in ("rpc_request_id", "remote_task_id"):
+        if value := getattr(result, label, ""):
+            ids.append(f"{label}={json.dumps(value)}")
+    if ids:
+        header += "\n" + " ".join(ids)
     body = reply or "(no text reply)"
     if state == protocol.STATE_INPUT_REQUIRED:
         body += f"\n\n(The peer needs more input — answer by calling a2a_call again with context_id '{reply_ctx}'.)"
@@ -221,7 +248,7 @@ def a2a_list(args: dict | None = None, **_: Any) -> str:
 
 
 def a2a_history(args: dict, **_: Any) -> str:
-    """Recall a persisted A2A conversation (survives compaction/restarts)."""
+    """Read the local saved transcript; does not poll remote task status."""
     context_id = str(args.get("context_id") or args.get("contextId") or "").strip()
     if not context_id:
         return "Error: 'context_id' is required (see a2a_list for known conversations)."
@@ -229,8 +256,13 @@ def a2a_history(args: dict, **_: Any) -> str:
     messages = protocol.load_conversation(context_id, limit=limit)
     if not messages:
         return f"No persisted conversation for context '{context_id}'."
-    lines = [f"Conversation {context_id} (last {len(messages)} messages):"]
+    lines = ["Local saved transcript (not remote task status; no remote polling).",
+             f"Conversation {context_id} (last {len(messages)} messages):"]
     for m in messages:
+        ids = [f"{key}={json.dumps(m[key])}" for key in ("rpc_request_id", "remote_task_id")
+               if isinstance(m.get(key), str) and m[key]]
+        if ids:
+            lines.append(" ".join(ids))
         text = (m.get("text") or "").strip()
         lines.append(f"[{m.get('role', '?')}] {text[:1000] + ' …[truncated]' if len(text) > 1000 else text}")
     return "\n".join(lines)
@@ -309,7 +341,7 @@ _TOOLS: dict[str, tuple[Any, str, dict, list[str]]] = {
                  ["agent", "message"]),
     "a2a_list": (a2a_list, "List configured A2A peer agents, persisted A2A conversations, and metrics.", {}, []),
     "a2a_history": (a2a_history,
-                    "Recall a persisted A2A conversation transcript by context_id (survives restarts and "
+                    "Read a local saved transcript, NOT remote task status (no remote polling), by context_id (survives restarts and "
                     "context compaction). Use a2a_list to see known context ids.",
                     {"context_id": _str("Context id of the conversation to recall."),
                      "limit": {"type": "integer", "description": "Max messages to return (default 50, max 200)."}},
