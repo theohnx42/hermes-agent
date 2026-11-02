@@ -2971,7 +2971,7 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         safe_keys = (
             "id", "session_id", "role", "content", "tool_call_id", "tool_calls", "tool_name",
             "timestamp", "token_count", "finish_reason", "reasoning", "reasoning_content",
-            "display_kind")
+            "display_kind", "content_preview")
         return {key: message.get(key) for key in safe_keys if key in message}
 
     async def _read_json_body(self, request: web.Request) -> tuple[dict[str, Any], Optional[web.Response]]:
@@ -3244,10 +3244,19 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         latest_page = order == "latest" or (order is None and default_page)
         limit = 500 if default_page else min(requested_limit, 500)
         include_compacted = _coerce_request_bool(request.query.get("include_compacted"), default=False)
+        preview_raw = request.query.get("preview_chars")
+        try:
+            preview_chars = None if preview_raw is None else int(preview_raw)
+            if preview_chars is not None and not 256 <= preview_chars <= 65536:
+                raise ValueError
+        except (ValueError, TypeError):
+            return _error_response("preview_chars must be between 256 and 65536", 400, code="invalid_pagination")
+        reader = db.get_messages if preview_chars is None else db.get_message_previews
+        preview = {} if preview_chars is None else {"preview_chars": preview_chars}
         # Compression lineage: return root→tip messages, matching the REST router (#51058).
         messages = await asyncio.to_thread(
-            db.get_messages, resolved_id, limit=limit, offset=offset, latest=latest_page,
-            include_compacted=include_compacted, include_ancestors=True)
+            reader, resolved_id, limit=limit, offset=offset, latest=latest_page,
+            include_compacted=include_compacted, include_ancestors=True, **preview)
         return web.json_response({
             "object": "list", "session_id": resolved_id,
             "data": [self._message_response(m) for m in messages],
