@@ -37,7 +37,11 @@ from agent.conversation_compression import (
 )
 from agent.context_engine import automatic_compaction_status_message
 from agent.display import KawaiiSpinner
-from agent.error_classifier import FailoverReason, classify_api_error
+from agent.error_classifier import (
+    FailoverReason,
+    classify_api_error,
+    ollama_tools_unsupported_message,
+)
 from agent.turn_context import (
     _compression_warrants_another_preflight_pass,
     build_turn_context,
@@ -4865,20 +4869,33 @@ def run_conversation(
                 ) and not is_context_length_error
 
                 if is_client_error:
+                    # Ollama "does not support tools" describes the requested
+                    # model definition. Activating the fallback chain would
+                    # answer the turn with a different model (a 7B canary or
+                    # a cloud provider). Stay on the requested model.
+                    _block_model_substitution = (
+                        classified.reason == FailoverReason.ollama_tools_unsupported
+                    )
                     # Try fallback before aborting — a different provider may
                     # not have the same issue (rate limit, auth, etc.). Only
                     # announce the attempt when a fallback chain actually
                     # exists; otherwise "trying fallback..." is a lie and the
                     # session looks like it's recovering when it's about to
                     # abort silently (#35314, #17446).
-                    if agent._has_pending_fallback():
+                    if (
+                        not _block_model_substitution
+                        and agent._has_pending_fallback()
+                    ):
                         if classified.reason == FailoverReason.content_policy_blocked:
                             agent._buffer_status("⚠️ Provider safety filter blocked this request — trying fallback...")
                         elif classified.reason == FailoverReason.ssl_cert_verification:
                             agent._buffer_status("⚠️ TLS certificate verification failed — trying fallback...")
                         else:
                             agent._buffer_status(f"⚠️ Non-retryable error (HTTP {status_code}) — trying fallback...")
-                    if agent._try_activate_fallback():
+                    if (
+                        not _block_model_substitution
+                        and agent._try_activate_fallback()
+                    ):
                         active_system_prompt = _sync_failover_system_message(
                             agent, api_messages, active_system_prompt)
                         retry_count = 0
@@ -4908,6 +4925,11 @@ def run_conversation(
                         agent._emit_status(
                             f"❌ TLS certificate verification failed: "
                             f"{_nonretryable_summary}"
+                        )
+                    elif classified.reason == FailoverReason.ollama_tools_unsupported:
+                        agent._emit_status(
+                            "❌ "
+                            + ollama_tools_unsupported_message(str(_model or ""))
                         )
                     else:
                         agent._emit_status(
@@ -5070,6 +5092,19 @@ def run_conversation(
                             "error": _nonretryable_summary,
                             "failure_reason": classified.reason.value,
                             "billing_block": _ce_block,
+                        }
+                    if classified.reason == FailoverReason.ollama_tools_unsupported:
+                        _tools_msg = ollama_tools_unsupported_message(
+                            str(_model or "")
+                        )
+                        return {
+                            "final_response": _tools_msg,
+                            "messages": messages,
+                            "api_calls": api_call_count,
+                            "completed": False,
+                            "failed": True,
+                            "error": _tools_msg,
+                            "failure_reason": classified.reason.value,
                         }
                     return {
                         "final_response": _nonretryable_summary,
