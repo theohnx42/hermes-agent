@@ -59,6 +59,10 @@ class FailoverReason(enum.Enum):
 
     # Request format
     format_error = "format_error"        # 400 bad request — abort or strip + retry
+    # Ollama refused a tools-bearing request because the model definition
+    # does not advertise tools. Deterministic and specific to that model:
+    # do not retry, compress, or substitute a fallback model.
+    ollama_tools_unsupported = "ollama_tools_unsupported"
     invalid_encrypted_content = "invalid_encrypted_content"  # Responses replay blob rejected — strip replay state and retry
     multimodal_tool_content_unsupported = "multimodal_tool_content_unsupported"  # Provider rejected list-type content in tool messages (e.g. Xiaomi MiMo) — downgrade to text and retry
 
@@ -95,6 +99,40 @@ class ClassifiedError:
     @property
     def is_auth(self) -> bool:
         return self.reason in {FailoverReason.auth, FailoverReason.auth_permanent}
+
+
+class OllamaToolsUnsupported(Exception):
+    """Preflight refusal when Ollama's ``/api/show`` omits the tools capability.
+
+    The message matches Ollama's own HTTP 400 (``<model> does not support
+    tools``) so a preflight refusal and a live rejection classify the same way.
+    This is not a claim that the weights can or cannot emit a tool call. It
+    only records that the server will not accept a tools-bearing request.
+    """
+
+    def __init__(self, model: str):
+        self.model = model or ""
+        self.status_code = 400
+        message = f"{self.model} does not support tools"
+        self.body = {"error": {"message": message, "type": "api_error"}}
+        super().__init__(message)
+
+
+def ollama_tools_unsupported_message(model: str) -> str:
+    """User-facing explanation for a tools turn the Ollama definition cannot accept."""
+    shown = (model or "").strip() or "the active Ollama model"
+    return (
+        f"Ollama model {shown} does not advertise tool support. "
+        "This tools-bearing turn was refused before substituting another model. "
+        "Hermes did not drop the tool list, did not invent a tool call, and did not "
+        "switch to a 7B or cloud model. A plain completion turn on this tag can still run. "
+        "A compatible route is an Ollama definition whose /api/show capabilities include "
+        "\"tools\" while the weights stay on this tag (FROM the original model). "
+        "Adding that advertisement is not evidence the weights can emit a real tool call; "
+        "a live canary still has to show a structured tool_call, a validated read-only "
+        "result, and a follow-up. There is no Hermes completion-text tool protocol on "
+        "this path."
+    )
 
 
 
@@ -688,6 +726,18 @@ def classify_api_error(
         }
         defaults.update(overrides)
         return ClassifiedError(**defaults)
+
+    # Ollama's tools gate. Must run before the generic 400 / large-session
+    # heuristic, which would otherwise compress or fall back. Distinct from
+    # OpenRouter's "no endpoints found that support tool use".
+    if "does not support tools" in error_msg:
+        return _result(
+            FailoverReason.ollama_tools_unsupported,
+            retryable=False,
+            should_fallback=False,
+            should_compress=False,
+            should_rotate_credential=False,
+        )
 
     # ── 1. Provider-specific patterns (highest priority) ────────────
 

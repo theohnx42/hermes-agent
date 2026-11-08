@@ -277,6 +277,36 @@ class ChatCompletionsTransport(ProviderTransport):
         """Tools are already in OpenAI format — identity."""
         return tools
 
+    def _refuse_unadvertised_ollama_tools(
+        self,
+        model: str,
+        tools: list[dict[str, Any]] | None,
+        params: dict[str, Any],
+    ) -> None:
+        """Refuse a tools-bearing request Ollama will reject before inference.
+
+        A definitive False from ``/api/show`` means the definition does not
+        advertise tools. The request is not rebuilt without tools, and no
+        textual tool protocol is substituted. None (unknown server, probe
+        failure, empty capabilities) leaves the existing request unchanged so
+        a live 400 can still be classified.
+        """
+        if not tools:
+            return
+        base_url = params.get("base_url") or ""
+        if not str(base_url).strip():
+            return
+        from agent.error_classifier import OllamaToolsUnsupported
+        from agent.model_metadata import query_ollama_supports_tools
+
+        advertised = query_ollama_supports_tools(
+            model,
+            str(base_url),
+            api_key=str(params.get("api_key") or ""),
+        )
+        if advertised is False:
+            raise OllamaToolsUnsupported(str(model or ""))
+
     def build_kwargs(
         self,
         model: str,
@@ -328,6 +358,8 @@ class ChatCompletionsTransport(ProviderTransport):
             anthropic_max_output: int | None
             extra_body_additions: dict | None
         """
+        self._refuse_unadvertised_ollama_tools(model, tools, params)
+
         # Codex sanitization: drop reasoning_items / call_id / response_item_id.
         # Pass model so the Gemini thought_signature (extra_content) is kept for
         # Gemini targets and stripped for strict non-Gemini providers.

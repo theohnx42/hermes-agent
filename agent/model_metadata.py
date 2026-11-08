@@ -1708,6 +1708,66 @@ def query_ollama_supports_vision(model: str, base_url: str, api_key: str = "") -
     return None
 
 
+def ollama_show_advertises_tools(show_payload: Any) -> Optional[bool]:
+    """Whether an Ollama ``/api/show`` payload advertises tool support.
+
+    Ollama's chat handler rejects ``tools`` when ``CheckCapabilities`` does
+    not find ``tools`` on the model. That list is what ``/api/show`` returns
+    as ``capabilities``. A Go template that mentions ``.Tools`` is not an
+    advertisement: copying one onto a completion definition is how a model
+    is made to *look* tool-capable. Hermes does not infer tools from the
+    template, a parser name, or a 7B wrapper.
+
+    Returns True or False when ``capabilities`` is a non-empty list, and
+    None when the payload does not say.
+    """
+    if not isinstance(show_payload, dict):
+        return None
+    caps = show_payload.get("capabilities")
+    if not isinstance(caps, list) or not caps:
+        return None
+    return any(str(cap).strip().lower() == "tools" for cap in caps)
+
+
+def query_ollama_supports_tools(
+    model: str, base_url: str, api_key: str = ""
+) -> Optional[bool]:
+    """Return Ollama's tools advertisement for ``model``.
+
+    True and False come only from ``/api/show`` ``capabilities``. None means
+    the server is not Ollama, is unreachable, or omitted the list. Callers
+    must not drop tools or invent a textual tool protocol on None.
+    """
+    import httpx
+
+    bare_model = _strip_provider_prefix(model)
+    if not bare_model or not base_url:
+        return None
+
+    try:
+        if detect_local_server_type(base_url, api_key=api_key) != "ollama":
+            return None
+    except Exception:
+        return None
+
+    server_url = _localhost_to_ipv4(base_url.rstrip("/"))
+    if server_url.endswith("/v1"):
+        server_url = server_url[:-3]
+
+    headers = _auth_headers(api_key)
+    try:
+        with httpx.Client(timeout=3.0, headers=headers) as client:
+            resp = client.post(
+                f"{server_url}/api/show", json={"name": bare_model}
+            )
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+    except Exception:
+        return None
+    return ollama_show_advertises_tools(data)
+
+
 def _query_ollama_api_show(model: str, base_url: str, api_key: str = "") -> Optional[int]:
     """Query an Ollama server's native ``/api/show`` for context length.
 
